@@ -49,7 +49,27 @@ class PredictiveService:
         trend = "upward" if future_y[-1] > y[-1] else "downward"
         growth = ((future_y[-1] - y[-1]) / y[-1] * 100) if y[-1] != 0 else 0
         score = int(model.score(X, y) * 100) if len(X) > 1 else 50
-        explanation = f"Using linear regression, the system predicts a gradual {trend} in {target_col} values over the next {periods} periods. Projected shift: {abs(growth):.1f}%. Confidence score: {score}%."
+        trend_word = "upward" if trend == "upward" else "downward"
+        growth_word = "growth" if trend == "upward" else "decline"
+        explanation = (
+            f"Forecast Analysis Results\n\n"
+            f"Using linear regression on {target_col} "
+            f"over {len(df)} data points, the model "
+            f"predicts a {trend_word} trend over the "
+            f"next {periods} periods.\n\n"
+            f"Key Findings:\n"
+            f"- Current average: {y.mean():.2f}\n"
+            f"- Predicted {growth_word}: {abs(growth):.1f}%\n"
+            f"- Starting value: {float(y[-1]):.2f}\n"
+            f"- Projected end value: {float(future_y[-1]):.2f}\n"
+            f"- Model confidence score: {score}%\n\n"
+            f"Interpretation: The {target_col} data "
+            f"shows a consistent {trend_word} pattern. "
+            f"{'This suggests positive momentum in the dataset.' if trend == 'upward' else 'This suggests a declining pattern that may require attention.'} "
+            f"The forecast is based on historical "
+            f"linear trends and assumes similar "
+            f"conditions going forward."
+        )
                  
         return {"results": forecast_results, "explanation": explanation}
 
@@ -88,9 +108,57 @@ class PredictiveService:
         
         # Section 8 Narrative for Anomaly
         if anomaly_indices:
-            explanation = f"Predictive scan identified {len(anomaly_indices)} anomalous records (outliers). Primary variance detected in {', '.join(usable_cols)}. These points deviate significantly from the statistical norm and warrant manual review."
+            pct = (
+                len(anomaly_indices) / len(numeric_df)
+            ) * 100
+            shown = str(anomaly_indices[:5])
+            more = (
+                '...' if len(anomaly_indices) > 5 else ''
+            )
+            explanation = (
+                f"Anomaly Detection Results\n\n"
+                f"Using Isolation Forest algorithm, "
+                f"the system scanned {len(numeric_df)} "
+                f"records across {len(usable_cols)} "
+                f"columns: {', '.join(usable_cols)}.\n\n"
+                f"Key Findings:\n"
+                f"- Total anomalies detected: "
+                f"{len(anomaly_indices)}\n"
+                f"- Anomaly rate: {pct:.1f}% of dataset\n"
+                f"- Affected columns: "
+                f"{', '.join(usable_cols)}\n"
+                f"- Sample anomaly indices: "
+                f"{shown}{more}\n\n"
+                f"Interpretation: These "
+                f"{len(anomaly_indices)} data points "
+                f"deviate significantly from the normal "
+                f"statistical distribution. Possible "
+                f"causes include data entry errors, "
+                f"genuine outliers, system recording "
+                f"issues, or unusual real-world events. "
+                f"Manual review of flagged records is "
+                f"recommended to determine if they "
+                f"represent valid data or errors that "
+                f"need correction."
+            )
         else:
-            explanation = "Structural integrity confirmed. No significant anomalies detected within the 95% confidence boundary."
+            explanation = (
+                f"Anomaly Detection Results\n\n"
+                f"Using Isolation Forest algorithm, "
+                f"the system scanned {len(numeric_df)} "
+                f"records across {len(usable_cols)} "
+                f"columns: {', '.join(usable_cols)}.\n\n"
+                f"Key Findings:\n"
+                f"- Total anomalies detected: 0\n"
+                f"- Anomaly rate: 0% of dataset\n"
+                f"- All records within normal range\n\n"
+                f"Interpretation: No significant "
+                f"anomalies detected. All data points "
+                f"fall within the 95% confidence "
+                f"boundary. The dataset appears clean "
+                f"and consistent with no unusual "
+                f"patterns requiring attention."
+            )
 
         return {"indices": anomaly_indices, "explanation": explanation}
 
@@ -123,7 +191,48 @@ class PredictiveService:
             centers.append(center_obj)
 
         # Section 8 Narrative for Clustering
-        explanation = f"{k} distinct behavioral clusters detected based on {', '.join(usable_cols)}. Each group represents high-similarity records. Cluster 0 typically contains lower values, while higher index clusters represent higher-intensity records."
+        cluster_sizes = {}
+        for label in labels:
+            cluster_sizes[int(label)] = (
+                cluster_sizes.get(int(label), 0) + 1
+            )
+
+        size_desc = "\n".join([
+            f"  - Cluster {k}: {v} records"
+            for k, v in sorted(cluster_sizes.items())
+        ])
+
+        center_desc = "\n".join([
+            f"  - Cluster {i}: "
+            + ", ".join([
+                f"{col}={center[j]:.2f}"
+                for j, col in enumerate(usable_cols)
+            ])
+            for i, center in enumerate(
+                model.cluster_centers_
+            )
+        ])
+
+        explanation = (
+            f"Clustering Analysis Results\n\n"
+            f"Using K-Means algorithm with k={k} "
+            f"clusters, the system analyzed "
+            f"{len(numeric_df)} records based on "
+            f"{len(usable_cols)} features: "
+            f"{', '.join(usable_cols)}.\n\n"
+            f"Cluster Distribution:\n"
+            f"{size_desc}\n\n"
+            f"Cluster Centers:\n"
+            f"{center_desc}\n\n"
+            f"Interpretation: The data has been "
+            f"divided into {k} distinct behavioral "
+            f"groups based on feature similarity. "
+            f"Records within the same cluster share "
+            f"similar characteristics across the "
+            f"analyzed columns. This segmentation "
+            f"can help identify patterns and groups "
+            f"within your dataset."
+        )
 
         return {
             "clusters": cluster_rows,

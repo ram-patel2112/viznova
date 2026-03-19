@@ -8,6 +8,24 @@ const Sidebar = () => {
   return (
     <div className="sidebar">
       <div className="sidebar-top">
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '16px 8px',
+          borderBottom: '1px solid #E2E8F0',
+          marginBottom: '8px'
+        }}>
+          <img 
+            src="/logo.png"
+            alt="VIZNOVA"
+            style={{
+              width: '36px',
+              height: '36px',
+              objectFit: 'contain'
+            }}
+          />
+        </div>
         <div className="sidebar-item active" onClick={() => navigate('/')}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>

@@ -26,30 +26,49 @@ class InsightService:
             low_label = clean_df.loc[clean_df[y_col].idxmin()][x_col]
 
             insights = []
-            
-            # 1. Volume summary
-            insights.append(f"The aggregate output for **{y_col}** stands at **{total:,.2f}**, maintaining an average consistency of **{avg:,.2f}** per vector.")
 
-            # 2. Peak performance
-            insights.append(f"Statistical dominance was observed at **{peak_label}** with a peak of **{max_val:,.2f}**, while critical lows were registered at **{low_label}** (**{min_val:,.2f}**).")
+            insights.append(
+                f"The aggregate output for {y_col} "
+                f"stands at {total:,.2f}, maintaining "
+                f"an average of {avg:,.2f} per entry."
+            )
 
-            # 3. Growth / Trend logic
+            insights.append(
+                f"Highest value was recorded at "
+                f"{peak_label} with {max_val:,.2f}, "
+                f"while the lowest was at "
+                f"{low_label} ({min_val:,.2f})."
+            )
+
             if len(clean_df) > 1:
                 first_val = clean_df[y_col].iloc[0]
                 last_val = clean_df[y_col].iloc[-1]
-                growth = ((last_val - first_val) / first_val * 100) if first_val != 0 else 0
-                trend_direction = "expansion" if growth > 0 else "contraction"
-                
+                growth = (
+                    (last_val - first_val) / first_val * 100
+                ) if first_val != 0 else 0
+                trend_direction = (
+                    "increase" if growth > 0 else "decrease"
+                )
                 if abs(growth) > 5:
-                    insights.append(f"The sector shows a clear **{abs(growth):.1f}% {trend_direction}** over the observed timeline.")
+                    insights.append(
+                        f"The data shows a "
+                        f"{abs(growth):.1f}% {trend_direction} "
+                        f"over the observed period."
+                    )
                 else:
-                    insights.append(f"Structural stability is evident, with **{y_col}** maintaining a steady equilibrium despite market volatility.")
+                    insights.append(
+                        f"{y_col} remains relatively stable "
+                        f"with minimal variation."
+                    )
 
-            # 4. Distribution logic (Pie/Bar)
             if chart_type in ['pie', 'bar']:
                 top_3 = clean_df.nlargest(3, y_col)
-                top_labels = ", ".join([str(l) for l in top_3[x_col].tolist()])
-                insights.append(f"The primary contributors to this distribution are **{top_labels}**.")
+                top_labels = ", ".join(
+                    [str(l) for l in top_3[x_col].tolist()]
+                )
+                insights.append(
+                    f"Top contributors: {top_labels}."
+                )
 
             return " ".join(insights)
         except Exception as e:
@@ -75,22 +94,34 @@ class InsightService:
 
         # Section 10: Insight Story Generator Aggregation
         report = [
-            f"# VIZNOVA Intelligent Data Story: {dataset_name}",
-            "\n## 1. Executive Intelligence Overview",
-            f"Automated analysis of **{dataset_name}** reveals a structure of **{summary['row_count']}** observations across **{summary['col_count']}** dimensions.",
-            f"The dataset is composed of **{len(num_cols)} metrics** (numerical) and **{len(cat_cols)} dimensions** (categorical)."
+            f"VIZNOVA Data Analysis Report: "
+            f"{dataset_name}",
+            "",
+            "Executive Overview",
+            f"Analysis of {dataset_name} reveals "
+            f"{summary['row_count']} observations "
+            f"across {summary['col_count']} dimensions. "
+            f"The dataset contains "
+            f"{len(num_cols)} numeric columns and "
+            f"{len(cat_cols)} categorical columns.",
         ]
 
-        # Quality & Cleaning Status
         missing_count = summary["missing_values"]
         if missing_count > 0:
-            report.append(f"\n> [!NOTE]\n> **Data Quality Check**: Found {missing_count} missing values. The VIZNOVA Auto-Cleaning engine is ready to implement Median/Mode imputation to maintain statistical integrity.")
+            report.append(
+                f"Data Quality: {missing_count} missing "
+                f"values detected. Auto-cleaning is "
+                f"available to fix this."
+            )
         else:
-            report.append("\n> [!TIP]\n> **Data Quality Check**: High integrity detected. No missing values found.")
+            report.append(
+                "Data Quality: No missing values found. "
+                "Dataset is clean and ready for analysis."
+            )
 
         # 2. Predictive Forecasting (Section 8)
         if date_cols and num_cols:
-            report.append("\n## 2. Temporal Forecasting & Projections")
+            report.append("\nTemporal Forecasting & Projections")
             t_col = date_cols[0]
             v_col = num_cols[0]
             try:
@@ -101,7 +132,7 @@ class InsightService:
 
         # 3. Anomaly Awareness (Section 8)
         if num_cols:
-            report.append("\n## 3. Anomaly Detection & Variance")
+            report.append("\nAnomaly Detection & Variance")
             try:
                 res = PredictiveService.detect_anomalies(df, num_cols[:3])
                 report.append(res["explanation"])
@@ -110,7 +141,7 @@ class InsightService:
 
         # 4. Behavioral Segmentation (Section 8)
         if len(num_cols) >= 2:
-            report.append("\n## 4. Similarity Clustering")
+            report.append("\nSimilarity Clustering")
             try:
                 res = PredictiveService.cluster_data(df, num_cols[:4], k=3)
                 report.append(res["explanation"])
@@ -118,9 +149,9 @@ class InsightService:
                 pass
 
         # 5. Strategic Conclusion
-        report.append("\n## 5. Strategic Insights")
+        report.append("\nStrategic Insights")
         report.append("Heuristic analysis suggests the dataset primary signals are concentrated in " + 
-                      (f"**{num_cols[0]}**" if num_cols else "categorical dimensions") + 
-                      ". We recommend utilizing the **Insert > AI Query** tool to explore specific correlations identified above.")
+                      (f"{num_cols[0]}" if num_cols else "categorical dimensions") + 
+                      ". We recommend utilizing the Insert > AI Query tool to explore specific correlations identified above.")
 
         return "\n".join(report)
