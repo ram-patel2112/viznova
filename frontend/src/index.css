@@ -1,0 +1,28 @@
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background: #F8FAFC;
+}
+
+*, *::before, *::after {
+  box-sizing: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  outline: none;
+}
