@@ -23,3 +23,16 @@ class Dashboard(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     dataset = relationship("Dataset")
+
+class Report(Base):
+    __tablename__ = "reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    dataset_id = Column(Integer, nullable=True)
+    dataset_name = Column(String, nullable=True)
+    charts = Column(JSON)
+    results_panel = Column(JSON, nullable=True)
+    columns_metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -47,15 +47,47 @@ class DatasetService:
             
             if col_type == "numeric":
                 numeric_cols.append(col)
-                
-            columns_metadata.append({
+
+            col_meta = {
                 "name": col,
                 "type": col_type,
                 "original_dtype": dtype,
-                "unique_count": df[col].nunique(),
+                "unique_count": int(df[col].nunique()),
                 "null_count": int(df[col].isna().sum()),
-                "sample_values": df[col].dropna().head(5).tolist()
-            })
+                "sample_values": [
+                    str(v) for v in 
+                    df[col].dropna().head(5).tolist()
+                ]
+            }
+
+            if col_type == "numeric":
+                numeric_series = pd.to_numeric(
+                    df[col], errors='coerce'
+                ).dropna()
+                if not numeric_series.empty:
+                    col_meta["min"] = round(
+                        float(numeric_series.min()), 2
+                    )
+                    col_meta["max"] = round(
+                        float(numeric_series.max()), 2
+                    )
+                    col_meta["mean"] = round(
+                        float(numeric_series.mean()), 2
+                    )
+                    col_meta["std"] = round(
+                        float(numeric_series.std()), 2
+                    )
+                    col_meta["median"] = round(
+                        float(numeric_series.median()), 2
+                    )
+                else:
+                    col_meta["min"] = None
+                    col_meta["max"] = None
+                    col_meta["mean"] = None
+                    col_meta["std"] = None
+                    col_meta["median"] = None
+
+            columns_metadata.append(col_meta)
 
         summary_stats = df.describe(include='all').replace({np.nan: None}).to_dict()
         sample_rows = df.head(10).replace({np.nan: None}).to_dict(orient="records")

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import './Dashboard.css';
 
@@ -39,6 +39,8 @@ const icons = {
   report: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line>'
 };
 
+const datasets = {};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -75,6 +77,112 @@ const Dashboard = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [selectedChart, setSelectedChart] = useState(null);
+  
+  const [showIntelligenceModal, setShowIntelligenceModal] = useState(false);
+  const [intelligenceData, setIntelligenceData] = useState(null);
+  const [isCleaning, setIsCleaning] = useState(false);
+
+  const [showDatasetInfoModal, setShowDatasetInfoModal] = useState(false);
+  const [showColumnStatsModal, setShowColumnStatsModal] = useState(false);
+  const [datasetInfoData, setDatasetInfoData] = useState(null);
+  const [columnStatsData, setColumnStatsData] = useState(null);
+  const [isLoadingInfo, setIsLoadingInfo] = useState(false);
+
+  const [reportName, setReportName] = useState('');
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedReportId, setSavedReportId] = useState(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(
+      window.location.search
+    );
+    const reportId = urlParams.get('reportId');
+
+    if (reportId) {
+      const loadReport = async () => {
+        try {
+          const response = await fetch(
+            `http://localhost:8000/reports/${reportId}`
+          );
+          if (!response.ok) return;
+          const report = await response.json();
+          
+          setCharts(report.charts || []);
+          setColumns(report.columns_metadata || []);
+          setDatasetName(report.dataset_name || '');
+          setDatasetId(
+            report.dataset_id 
+              ? String(report.dataset_id) 
+              : null
+          );
+          setSavedReportId(parseInt(reportId));
+          setHasUnsavedChanges(false);
+          
+        } catch(e) {
+          console.error('Load report error:', e);
+        }
+      };
+      loadReport();
+      return;
+    }
+
+    const loadDatasetFromUrl = async () => {
+      const urlDatasetId = urlParams.get('datasetId');
+      
+      if (!urlDatasetId || 
+          urlDatasetId === 'new_upload') return;
+      
+      if (columns.length > 0 && columns[0] !== 'Column 1') return;
+      
+      try {
+        const response = await fetch(
+          `http://localhost:8000/datasets/${urlDatasetId}`
+        );
+        
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        
+        const colsMeta = data.columns_metadata || [];
+        let realColumns = colsMeta.map(col => {
+          if (typeof col === 'string') return col;
+          if (col.name) return col.name;
+          return String(col);
+        });
+        
+        if (realColumns.length === 0) return;
+        
+        setColumns(realColumns);
+        setDatasetName(data.name || data.filename || '');
+        setDatasetId(urlDatasetId);
+        
+        datasets[urlDatasetId] = {
+          id: urlDatasetId,
+          name: data.name || data.filename,
+          file_path: data.file_path,
+          columns_metadata: colsMeta,
+        };
+        
+      } catch(e) {
+        console.error('Failed to load dataset:', e);
+      }
+    };
+    
+    loadDatasetFromUrl();
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges && charts.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges, charts]);
 
   const handleFileUpload = async (event) => {
     if (!event.target.files || event.target.files.length === 0) return;
@@ -127,11 +235,65 @@ const Dashboard = () => {
       setDatasetName(data.name || file.name);
       setDatasetId(data.id);
       
+      const quality = detailData.quality_metrics || {};
+      const colsMeta = detailData.columns_metadata || [];
+
+      setIntelligenceData({
+        name: data.name || file.name,
+        datasetId: data.id,
+        rows: data.row_count || 0,
+        columns: data.column_count || 0,
+        numericCols: colsMeta.filter(
+          c => c.type === 'numeric'
+        ).length,
+        categoricalCols: colsMeta.filter(
+          c => c.type === 'categorical'
+        ).length,
+        dateCols: colsMeta.filter(
+          c => c.type === 'date'
+        ).length,
+        missingValues: quality.missing_values 
+          || data.preprocessing_summary
+            ?.missing_values_filled 
+          || 0,
+        duplicates: quality.duplicate_rows 
+          || data.preprocessing_summary
+            ?.duplicates_removed 
+          || 0,
+        outliers: quality.outliers_detected || 0,
+        preprocessingSummary: 
+          data.preprocessing_summary || {},
+        correlationInsights: 
+          detailData.correlation_insights || [],
+      });
+
+      setShowIntelligenceModal(true);
       navigate(`/dashboard?datasetId=${data.id}`);
       
     } catch (error) {
       console.error('Upload error:', error);
       alert('Upload failed. Make sure backend is running.');
+    }
+  };
+
+  const handleCleanDataset = async () => {
+    if (!intelligenceData?.datasetId) return;
+    setIsCleaning(true);
+    try {
+      const response = await fetch(
+        `http://localhost:8000/datasets/${intelligenceData.datasetId}/clean`,
+        { method: 'POST' }
+      );
+      const result = await response.json();
+      setIntelligenceData(prev => ({
+        ...prev,
+        cleaned: true,
+        cleanSummary: result
+      }));
+    } catch(e) {
+      console.error('Clean failed:', e);
+    } finally {
+      setIsCleaning(false);
     }
   };
 
@@ -271,6 +433,7 @@ const Dashboard = () => {
             y: chartY
           };
           setCharts(prev => [...prev, newChart]);
+          setHasUnsavedChanges(true);
         }
         
         setResultsPanel({
@@ -412,6 +575,7 @@ const Dashboard = () => {
       };
       
       setCharts(prev => [...prev, newChart]);
+      setHasUnsavedChanges(true);
       setIsChartModalOpen(false);
       setXAxis('');
       setYAxis('');
@@ -497,15 +661,15 @@ const Dashboard = () => {
             </div>
             <div className="custom-ribbon-group" style={{ borderRight: 'none' }}>
               <div className="custom-ribbon-buttons-row">
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`} onClick={handleDatasetInfo}>
                   <Icon path={icons.info} />
                   <span>Dataset Info</span>
                 </div>
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`} onClick={handleCleanData}>
                   <Icon path={icons.wand} />
                   <span>Clean Data</span>
                 </div>
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`} onClick={handleColumnStats}>
                   <Icon path={icons.table} />
                   <span>Column Stats</span>
                 </div>
@@ -656,15 +820,24 @@ const Dashboard = () => {
           <>
             <div className="custom-ribbon-group" style={{ borderRight: 'none' }}>
               <div className="custom-ribbon-buttons-row">
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div 
+                  className={`custom-ribbon-btn ${!datasetId || charts.length === 0 ? 'disabled' : ''}`}
+                  onClick={handleExportPDF}
+                >
                   <Icon path={icons.pdf} />
                   <span>Export PDF</span>
                 </div>
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div 
+                  className={`custom-ribbon-btn ${!datasetId || charts.length === 0 ? 'disabled' : ''}`}
+                  onClick={handleExportPNG}
+                >
                   <Icon path={icons.img} />
                   <span>Export PNG</span>
                 </div>
-                <div className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}>
+                <div 
+                  className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}
+                  onClick={handleDownloadReport}
+                >
                   <Icon path={icons.report} />
                   <span>Download Report</span>
                 </div>
@@ -678,6 +851,527 @@ const Dashboard = () => {
     }
   };
 
+  const handleDatasetInfo = async () => {
+    if (!datasetId) return;
+    setIsLoadingInfo(true);
+    try {
+      const response = await fetch(
+        `http://localhost:8000/datasets/${datasetId}`
+      );
+      const data = await response.json();
+      setDatasetInfoData(data);
+      setShowDatasetInfoModal(true);
+    } catch(e) {
+      console.error('Dataset info error:', e);
+    } finally {
+      setIsLoadingInfo(false);
+    }
+  };
+
+  const handleColumnStats = async () => {
+    if (!datasetId) return;
+    setIsLoadingInfo(true);
+    try {
+      const response = await fetch(
+        `http://localhost:8000/datasets/${datasetId}`
+      );
+      const data = await response.json();
+      const colsMeta = data.columns_metadata || [];
+      
+      const statsPromises = colsMeta
+        .filter(col => col.type === 'numeric')
+        .map(async col => {
+          return {
+            ...col,
+            hasStats: true
+          };
+        });
+      
+      setColumnStatsData(colsMeta);
+      setShowColumnStatsModal(true);
+    } catch(e) {
+      console.error('Column stats error:', e);
+    } finally {
+      setIsLoadingInfo(false);
+    }
+  };
+
+  const handleCleanData = async () => {
+    if (!datasetId) return;
+    try {
+      const response = await fetch(
+        `http://localhost:8000/datasets/${datasetId}/clean`,
+        { method: 'POST' }
+      );
+      const data = await response.json();
+      setResultsPanel({
+        isOpen: true,
+        title: 'Data Cleaning Complete',
+        content: `Dataset cleaned successfully.\n\n` +
+          `Missing values filled: ${data.missing_filled || 0}\n` +
+          `Duplicate rows removed: ${data.duplicates_removed || 0}\n` +
+          `Columns normalized: ${data.columns_normalized || 0}\n\n` +
+          `Your dataset is now clean and ready for analysis.`,
+        status: 'success'
+      });
+    } catch(e) {
+      console.error('Clean error:', e);
+    }
+  };
+
+  const handleExportPNG = () => {
+    if (charts.length === 0) {
+      alert('Please generate at least one chart before exporting.');
+      return;
+    }
+    
+    charts.forEach((chart, index) => {
+      if (chart.image) {
+        const link = document.createElement('a');
+        link.href = `data:image/png;base64,${chart.image}`;
+        link.download = `${chart.title.replace(/[^a-z0-9]/gi, '_')}_${index + 1}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    });
+  };
+
+  const handleDownloadReport = async () => {
+    if (!datasetId) return;
+    
+    try {
+      setResultsPanel({
+        isOpen: true,
+        title: 'Generating Report',
+        content: 'Please wait...',
+        status: 'loading'
+      });
+      
+      const response = await fetch(
+        `http://localhost:8000/datasets/${datasetId}/story`
+      );
+      const data = await response.json();
+      
+      const reportContent = `
+VIZNOVA ANALYSIS REPORT
+========================
+Dataset: ${datasetName || datasetId}
+Generated: ${new Date().toLocaleString()}
+
+DATASET OVERVIEW
+----------------
+Charts Generated: ${charts.length}
+
+INSIGHT STORY
+-------------
+${data.story || 'No story available.'}
+
+VISUALIZATIONS SUMMARY
+----------------------
+${charts.map((chart, i) => 
+  `${i + 1}. ${chart.title}\n   ${chart.insight || 'No insight available.'}`
+).join('\n\n')}
+
+========================
+Generated by VIZNOVA
+Intelligent Data Analytics Platform
+`.trim();
+
+const chartsHTML = charts.map(chart => `
+  <div style="margin-bottom: 32px;
+    page-break-inside: avoid;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 20px;">
+    <h3 style="margin: 0 0 12px 0;
+      font-size: 15px;
+      color: #0F172A;
+      font-family: Inter, sans-serif;
+      border-bottom: 1px solid #E2E8F0;
+      padding-bottom: 8px;">
+      ${chart.title}
+    </h3>
+    ${chart.image
+      ? `<img 
+          src="data:image/png;base64,${chart.image}"
+          style="width: 100%;
+          max-height: 320px;
+          object-fit: contain;
+          margin-bottom: 12px;" />`
+      : '<p style="color:#475569">No image available</p>'
+    }
+    ${chart.insight
+      ? `<p style="margin: 12px 0 0 0;
+          font-size: 13px;
+          color: #475569;
+          font-family: Inter, sans-serif;
+          line-height: 1.7;
+          background: #F8FAFC;
+          padding: 12px;
+          border-radius: 6px;">
+          ${chart.insight}
+        </p>`
+      : ''
+    }
+  </div>
+`).join('');
+
+const storySection = data.story
+  ? `<div style="margin-bottom: 32px;
+      background: #EFF6FF;
+      border: 1px solid #DBEAFE;
+      border-radius: 8px;
+      padding: 20px;">
+      <h2 style="margin: 0 0 12px 0;
+        font-size: 16px;
+        color: #2563EB;
+        font-family: Inter, sans-serif;">
+        AI Insight Story
+      </h2>
+      <p style="margin: 0;
+        font-size: 13px;
+        color: #1E40AF;
+        line-height: 1.8;
+        font-family: Inter, sans-serif;
+        white-space: pre-wrap;">
+        ${data.story}
+      </p>
+    </div>`
+  : '';
+
+const printWindow = window.open('', '_blank');
+
+printWindow.document.write(`
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>VIZNOVA Report - ${datasetName || 'Analysis'}</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        padding: 40px;
+        color: #0F172A;
+        max-width: 900px;
+        margin: 0 auto;
+        background: white;
+      }
+      @media print {
+        body { padding: 20px; }
+        .no-print { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div style="
+      border-bottom: 3px solid #2563EB;
+      padding-bottom: 20px;
+      margin-bottom: 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;">
+      <div>
+        <h1 style="
+          margin: 0 0 6px 0;
+          font-size: 26px;
+          font-weight: 700;
+          color: #2563EB;">
+          VIZNOVA Analysis Report
+        </h1>
+        <p style="
+          margin: 0;
+          font-size: 14px;
+          color: #475569;">
+          Dataset: <strong>${datasetName || datasetId}</strong>
+        </p>
+        <p style="
+          margin: 4px 0 0 0;
+          font-size: 12px;
+          color: #94A3B8;">
+          Generated: ${new Date().toLocaleString()}
+        </p>
+      </div>
+      <div style="
+        background: #EFF6FF;
+        border: 1px solid #DBEAFE;
+        border-radius: 8px;
+        padding: 12px 16px;
+        text-align: center;">
+        <div style="
+          font-size: 24px;
+          font-weight: 700;
+          color: #2563EB;">
+          ${charts.length}
+        </div>
+        <div style="
+          font-size: 11px;
+          color: #475569;">
+          Charts
+        </div>
+      </div>
+    </div>
+
+    ${storySection}
+
+    <h2 style="
+      margin: 0 0 20px 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: #0F172A;">
+      Visualizations & Insights
+    </h2>
+
+    ${charts.length === 0
+      ? `<p style="color: #475569; 
+          font-size: 13px;">
+          No charts generated yet.
+        </p>`
+      : chartsHTML
+    }
+
+    <div style="
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid #E2E8F0;
+      font-size: 11px;
+      color: #94A3B8;
+      text-align: center;">
+      Generated by VIZNOVA — 
+      Intelligent Data Analytics Platform
+    </div>
+
+    <div class="no-print" style="
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      gap: 12px;">
+      <button onclick="window.print()"
+        style="
+          padding: 12px 24px;
+          background: #2563EB;
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;">
+        Save as PDF
+      </button>
+      <button onclick="window.close()"
+        style="
+          padding: 12px 24px;
+          background: #F1F5F9;
+          color: #0F172A;
+          border: 1px solid #E2E8F0;
+          border-radius: 8px;
+          font-size: 14px;
+          cursor: pointer;">
+        Close
+      </button>
+    </div>
+  </body>
+  </html>
+`);
+
+printWindow.document.close();
+printWindow.focus();
+
+setResultsPanel({
+  isOpen: true,
+  title: 'Report Ready',
+  content: 'Your report has opened in a new window. Click "Save as PDF" to download it as PDF.',
+  status: 'success'
+});
+      
+    } catch(e) {
+      console.error('Report download error:', e);
+      setResultsPanel({
+        isOpen: true,
+        title: 'Export Failed',
+        content: 'Failed to generate report. Please try again.',
+        status: 'error'
+      });
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (charts.length === 0) {
+      alert('Please generate at least one chart before exporting.');
+      return;
+    }
+    
+    const printWindow = window.open('', '_blank');
+    
+    const chartsHTML = charts.map(chart => `
+      <div style="margin-bottom: 32px; 
+        page-break-inside: avoid;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 16px;">
+        <h3 style="margin: 0 0 12px 0;
+          font-size: 14px;
+          color: #0F172A;
+          font-family: Inter, sans-serif;">
+          ${chart.title}
+        </h3>
+        ${chart.image 
+          ? `<img src="data:image/png;base64,${chart.image}" 
+              style="width: 100%; max-height: 300px; 
+              object-fit: contain;" />`
+          : '<p>No image available</p>'
+        }
+        ${chart.insight 
+          ? `<p style="margin: 12px 0 0 0;
+              font-size: 12px;
+              color: #475569;
+              font-family: Inter, sans-serif;
+              line-height: 1.6;">
+              ${chart.insight}
+            </p>`
+          : ''
+        }
+      </div>
+    `).join('');
+    
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>VIZNOVA Report - ${datasetName || 'Analysis'}</title>
+        <style>
+          body {
+            font-family: Inter, system-ui, sans-serif;
+            padding: 40px;
+            color: #0F172A;
+            max-width: 900px;
+            margin: 0 auto;
+          }
+          .header {
+            border-bottom: 2px solid #2563EB;
+            padding-bottom: 16px;
+            margin-bottom: 32px;
+          }
+          .title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2563EB;
+            margin: 0;
+          }
+          .subtitle {
+            font-size: 13px;
+            color: #475569;
+            margin: 4px 0 0 0;
+          }
+          .meta {
+            display: flex;
+            gap: 24px;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #475569;
+          }
+          @media print {
+            body { padding: 20px; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1 class="title">VIZNOVA Analysis Report</h1>
+          <p class="subtitle">
+            Dataset: ${datasetName || datasetId}
+          </p>
+          <div class="meta">
+            <span>Generated: ${new Date().toLocaleString()}</span>
+            <span>Charts: ${charts.length}</span>
+          </div>
+        </div>
+        ${chartsHTML}
+        <div style="margin-top: 40px;
+          padding-top: 16px;
+          border-top: 1px solid #E2E8F0;
+          font-size: 11px;
+          color: #94A3B8;
+          text-align: center;">
+          Generated by VIZNOVA — 
+          Intelligent Data Analytics Platform
+        </div>
+      </body>
+      </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.focus();
+    
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+  };
+
+  const handleSaveReport = async (name, navigateAfter = false) => {
+    if (!name.trim()) {
+      alert('Please enter a report name.');
+      return;
+    }
+    
+    setIsSaving(true);
+    
+    try {
+      const reportData = {
+        name: name.trim(),
+        dataset_id: datasetId ? parseInt(datasetId) : null,
+        dataset_name: datasetName || '',
+        charts: charts.map(chart => ({
+          id: chart.id,
+          title: chart.title,
+          image: chart.image,
+          insight: chart.insight,
+          chartType: chart.chartType,
+          x: chart.x,
+          y: chart.y
+        })),
+        results_panel: resultsPanel.isOpen
+          ? {
+              title: resultsPanel.title,
+              content: resultsPanel.content,
+              status: resultsPanel.status
+            }
+          : null,
+        columns_metadata: columns
+      };
+      
+      const response = await fetch(
+        'http://localhost:8000/reports',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(reportData)
+        }
+      );
+      
+      const data = await response.json();
+      setSavedReportId(data.id);
+      setHasUnsavedChanges(false);
+      setShowSaveModal(false);
+      setReportName('');
+      
+      if (navigateAfter) {
+        navigate('/');
+      } else {
+        alert('Report saved successfully!');
+      }
+      
+    } catch(e) {
+      console.error('Save error:', e);
+      alert('Failed to save report.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="dashboard-layout">
       {/* Hidden file inputs */}
@@ -687,7 +1381,16 @@ const Dashboard = () => {
       {/* TOP BAR */}
       <div className="top-bar">
         <div className="top-bar-left">
-          <button className="back-btn" onClick={() => navigate('/')}>
+          <button 
+            className="back-btn" 
+            onClick={() => {
+              if (hasUnsavedChanges && charts.length > 0) {
+                setShowSaveModal(true);
+              } else {
+                navigate('/');
+              }
+            }}
+          >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
@@ -698,6 +1401,37 @@ const Dashboard = () => {
         </div>
         
         <div className="top-bar-right">
+          <button
+            onClick={() => {
+              if (charts.length === 0) {
+                alert('Generate at least one chart before saving.');
+                return;
+              }
+              setShowSaveModal(true);
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              background: hasUnsavedChanges && charts.length > 0 ? '#2563EB' : '#F1F5F9',
+              color: hasUnsavedChanges && charts.length > 0 ? 'white' : '#475569',
+              border: hasUnsavedChanges && charts.length > 0 ? 'none' : '1px solid #E2E8F0',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: '500',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            {hasUnsavedChanges && charts.length > 0 ? 'Save Report*' : 'Save Report'}
+          </button>
+
           <select 
             className="dropdown-select" 
             value={datasetId ? 'Loaded' : 'Select dataset'} 
@@ -741,67 +1475,253 @@ const Dashboard = () => {
         <div className="canvas-and-results">
           {/* Dashboard Canvas */}
           <div className="dashboard-canvas">
-            {!datasetId && charts.length === 0 ? (
+            {!datasetId ? (
+              /* No dataset - show upload area */
               <div className="empty-state-container">
-                <svg className="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="17 8 12 3 7 8"></polyline>
-                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                <svg className="empty-icon" width="48" 
+                  height="48" viewBox="0 0 24 24" 
+                  fill="none" stroke="currentColor" 
+                  strokeWidth="1.5">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
-                <h3>Upload a dataset to start building your dashboard</h3>
-                <p>Drag and drop data or use the upload options.</p>
-                
+                <h3>Upload a dataset to start 
+                  building your dashboard</h3>
+                <p>Drag and drop data or use 
+                  the upload options.</p>
                 <div className="import-cards">
-                  <div className="import-card" onClick={() => fileInputRefExcel.current?.click()}>
-                    <Icon path={icons.excel} color="#2563EB" />
+                  <div className="import-card" 
+                    onClick={() => 
+                      fileInputRefExcel.current?.click()
+                    }>
+                    <Icon path={icons.excel} />
                     <div className="import-text">
-                      <div className="import-title">Import Excel</div>
-                      <div className="import-subtitle">Upload .xls/.xlsx files</div>
+                      <div className="import-title">
+                        Import Excel
+                      </div>
+                      <div className="import-subtitle">
+                        Upload .xls/.xlsx files
+                      </div>
                     </div>
                   </div>
-
-                  <div className="import-card" onClick={() => fileInputRefCsv.current?.click()}>
-                    <Icon path={icons.csv} color="#2563EB" />
+                  <div className="import-card"
+                    onClick={() => 
+                      fileInputRefCsv.current?.click()
+                    }>
+                    <Icon path={icons.csv} />
                     <div className="import-text">
-                      <div className="import-title">Import CSV</div>
-                      <div className="import-subtitle">Upload .csv files</div>
+                      <div className="import-title">
+                        Import CSV
+                      </div>
+                      <div className="import-subtitle">
+                        Upload .csv files
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
+
+            ) : charts.length === 0 ? (
+              /* Dataset loaded but no charts yet */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                minHeight: '400px',
+                gap: '24px'
+              }}>
+                <div style={{
+                  width: '100%',
+                  maxWidth: '800px',
+                  padding: '32px',
+                  background: '#FFFFFF',
+                  border: '2px dashed #CBD5E1',
+                  borderRadius: '12px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{
+                    fontSize: '40px',
+                    marginBottom: '12px'
+                  }}>📊</div>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#0F172A',
+                    margin: '0 0 8px 0'
+                  }}>
+                    Dataset loaded — Ready to visualize
+                  </h3>
+                  <p style={{
+                    fontSize: '13px',
+                    color: '#475569',
+                    margin: '0 0 24px 0'
+                  }}>
+                    Your dataset has been loaded successfully. 
+                    Use the Visualize tab or click a chart 
+                    type below to generate your first 
+                    visualization.
+                  </p>
+                  <div style={{
+                    display: 'flex',
+                    gap: '12px',
+                    justifyContent: 'center',
+                    flexWrap: 'wrap'
+                  }}>
+                    {[
+                      { label: 'Bar Chart', icon: icons.bar, type: 'Bar Chart' },
+                      { label: 'Line Chart', icon: icons.line, type: 'Line Chart' },
+                      { label: 'Pie Chart', icon: icons.pie, type: 'Pie Chart' },
+                      { label: 'Scatter Plot', icon: icons.scatter, type: 'Scatter Plot' },
+                    ].map((chart, i) => (
+                      <div
+                        key={i}
+                        onClick={() => {
+                          setSelectedChartType(chart.type);
+                          setIsChartModalOpen(true);
+                        }}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '16px 20px',
+                          background: '#F8FAFC',
+                          border: '1px solid #E2E8F0',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease',
+                          minWidth: '100px'
+                        }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.background = '#EFF6FF';
+                          e.currentTarget.style.borderColor = '#2563EB';
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = '#F8FAFC';
+                          e.currentTarget.style.borderColor = '#E2E8F0';
+                        }}
+                      >
+                        <svg width="24" height="24" 
+                          viewBox="0 0 24 24" fill="none" 
+                          stroke="#2563EB" strokeWidth="1.5"
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                          dangerouslySetInnerHTML={{ 
+                            __html: chart.icon 
+                          }}
+                        />
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          color: '#0F172A'
+                        }}>
+                          {chart.label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{
+                    fontSize: '12px',
+                    color: '#94A3B8',
+                    marginTop: '16px'
+                  }}>
+                    Or use the Visualize tab for 
+                    more chart types
+                  </p>
+                </div>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '16px',
+                  width: '100%',
+                  maxWidth: '800px'
+                }}>
+                  {[
+                    {
+                      icon: '🔍',
+                      title: 'Explore Data',
+                      desc: 'Use Data tab to view column statistics and dataset info'
+                    },
+                    {
+                      icon: '🤖',
+                      title: 'Ask AI',
+                      desc: 'Use AI tab to query your data in natural language'
+                    },
+                    {
+                      icon: '📈',
+                      title: 'Run Analytics',
+                      desc: 'Use Analytics tab for Forecast, Anomaly and Clustering'
+                    },
+                  ].map((tip, i) => (
+                    <div key={i} style={{
+                      background: '#FFFFFF',
+                      border: '1px solid #E2E8F0',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{
+                        fontSize: '24px',
+                        marginBottom: '8px'
+                      }}>
+                        {tip.icon}
+                      </div>
+                      <div style={{
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        color: '#0F172A',
+                        marginBottom: '4px'
+                      }}>
+                        {tip.title}
+                      </div>
+                      <div style={{
+                        fontSize: '12px',
+                        color: '#475569'
+                      }}>
+                        {tip.desc}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
             ) : (
+              /* Charts exist - show grid */
               <div className={`charts-grid grid-${layout.split(' ')[0]}`}>
                 {charts.map(chart => (
-                  <div 
-                    key={chart.id} 
-                    className={`chart-card ${selectedChart?.id === chart.id ? 'selected' : ''}`}
+                  <div
+                    key={chart.id}
+                    className="chart-card"
                     onClick={() => setSelectedChart(chart)}
                   >
                     <div className="chart-card-header">
-                      <span className="chart-card-title">{chart.title}</span>
-                      <button 
+                      <span className="chart-card-title">
+                        {chart.title}
+                      </span>
+                      <button
                         className="chart-card-remove"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setCharts(prev => 
+                          setCharts(prev =>
                             prev.filter(c => c.id !== chart.id)
                           );
-                          if (selectedChart?.id === chart.id) {
-                            setSelectedChart(null);
-                          }
                         }}
                       >
                         ×
                       </button>
                     </div>
                     {chart.image ? (
-                      <img 
+                      <img
                         src={`data:image/png;base64,${chart.image}`}
                         alt={chart.title}
-                        style={{ 
-                          width: '100%', 
-                          height: '220px', 
-                          objectFit: 'contain' 
+                        style={{
+                          width: '100%',
+                          height: '220px',
+                          objectFit: 'contain'
                         }}
                       />
                     ) : (
@@ -1070,6 +1990,1201 @@ const Dashboard = () => {
         </div>
       )}
 
+      {showIntelligenceModal && intelligenceData && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 2000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '16px',
+            width: '620px',
+            maxWidth: '92vw',
+            maxHeight: '88vh',
+            overflowY: 'auto',
+            boxShadow: '0 25px 80px rgba(0,0,0,0.25)'
+          }}>
+
+            {/* Modal Header */}
+            <div style={{
+              background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+              borderRadius: '16px 16px 0 0',
+              padding: '24px 28px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start'
+            }}>
+              <div>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '6px'
+                }}>
+                  <svg width="22" height="22" 
+                    viewBox="0 0 24 24" fill="none" 
+                    stroke="white" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <h2 style={{
+                    fontSize: '18px',
+                    fontWeight: '700',
+                    color: 'white',
+                    margin: 0
+                  }}>
+                    Dataset Intelligence Report
+                  </h2>
+                </div>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'rgba(255,255,255,0.8)',
+                  margin: 0
+                }}>
+                  {intelligenceData.name} — 
+                  Automated analysis complete
+                </p>
+              </div>
+            </div>
+
+            <div style={{ padding: '28px' }}>
+
+              {/* Stats Grid */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: '12px',
+                marginBottom: '24px'
+              }}>
+                {[
+                  {
+                    label: 'Total Rows',
+                    value: intelligenceData.rows
+                      .toLocaleString(),
+                    icon: '📊',
+                    color: '#2563EB',
+                    bg: '#EFF6FF'
+                  },
+                  {
+                    label: 'Total Columns',
+                    value: intelligenceData.columns,
+                    icon: '📋',
+                    color: '#7C3AED',
+                    bg: '#F5F3FF'
+                  },
+                  {
+                    label: 'Numeric Cols',
+                    value: intelligenceData.numericCols,
+                    icon: '🔢',
+                    color: '#16A34A',
+                    bg: '#F0FDF4'
+                  },
+                  {
+                    label: 'Categorical',
+                    value: intelligenceData
+                      .categoricalCols,
+                    icon: '🏷️',
+                    color: '#D97706',
+                    bg: '#FFFBEB'
+                  },
+                ].map((item, i) => (
+                  <div key={i} style={{
+                    background: item.bg,
+                    border: `1px solid ${item.color}22`,
+                    borderRadius: '10px',
+                    padding: '16px 12px',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{
+                      fontSize: '20px',
+                      marginBottom: '8px'
+                    }}>
+                      {item.icon}
+                    </div>
+                    <div style={{
+                      fontSize: '24px',
+                      fontWeight: '700',
+                      color: item.color,
+                      lineHeight: 1
+                    }}>
+                      {item.value}
+                    </div>
+                    <div style={{
+                      fontSize: '11px',
+                      color: '#475569',
+                      marginTop: '6px',
+                      fontWeight: '500'
+                    }}>
+                      {item.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Data Quality Section */}
+              <div style={{
+                border: '1px solid #E2E8F0',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                marginBottom: '20px'
+              }}>
+                <div style={{
+                  background: '#F8FAFC',
+                  padding: '12px 16px',
+                  borderBottom: '1px solid #E2E8F0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <svg width="16" height="16" 
+                    viewBox="0 0 24 24" fill="none" 
+                    stroke="#2563EB" strokeWidth="2">
+                    <path d="M9 11l3 3L22 4"/>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                  </svg>
+                  <span style={{
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    color: '#0F172A'
+                  }}>
+                    Data Quality Check
+                  </span>
+                  <span style={{
+                    marginLeft: 'auto',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: '20px',
+                    background: (
+                      intelligenceData.missingValues === 0 &&
+                      intelligenceData.duplicates === 0 &&
+                      intelligenceData.outliers === 0
+                    ) ? '#DCFCE7' : '#FEF3C7',
+                    color: (
+                      intelligenceData.missingValues === 0 &&
+                      intelligenceData.duplicates === 0 &&
+                      intelligenceData.outliers === 0
+                    ) ? '#16A34A' : '#D97706',
+                    fontWeight: '600'
+                  }}>
+                    {(
+                      intelligenceData.missingValues === 0 &&
+                      intelligenceData.duplicates === 0 &&
+                      intelligenceData.outliers === 0
+                    ) ? '✓ Clean' : '⚠ Issues Found'}
+                  </span>
+                </div>
+                {[
+                  {
+                    label: 'Missing Values',
+                    value: intelligenceData.missingValues,
+                    desc: intelligenceData.missingValues === 0
+                      ? 'No missing values found'
+                      : `${intelligenceData.missingValues} cells need attention`,
+                    good: intelligenceData.missingValues === 0
+                  },
+                  {
+                    label: 'Duplicate Rows',
+                    value: intelligenceData.duplicates,
+                    desc: intelligenceData.duplicates === 0
+                      ? 'No duplicates detected'
+                      : `${intelligenceData.duplicates} duplicate rows found`,
+                    good: intelligenceData.duplicates === 0
+                  },
+                  {
+                    label: 'Outliers Detected',
+                    value: intelligenceData.outliers,
+                    desc: intelligenceData.outliers === 0
+                      ? 'All values within normal range'
+                      : `${intelligenceData.outliers} outliers flagged`,
+                    good: intelligenceData.outliers === 0
+                  },
+                ].map((item, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '14px 16px',
+                    borderBottom: i < 2
+                      ? '1px solid #F1F5F9'
+                      : 'none',
+                    background: 'white'
+                  }}>
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '8px',
+                      background: item.good
+                        ? '#DCFCE7' : '#FEF3C7',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: '12px',
+                      fontSize: '14px'
+                    }}>
+                      {item.good ? '✓' : '⚠'}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        color: '#0F172A'
+                      }}>
+                        {item.label}
+                      </div>
+                      <div style={{
+                        fontSize: '12px',
+                        color: '#475569',
+                        marginTop: '2px'
+                      }}>
+                        {item.desc}
+                      </div>
+                    </div>
+                    <div style={{
+                      fontSize: '20px',
+                      fontWeight: '700',
+                      color: item.good
+                        ? '#16A34A' : '#D97706',
+                      minWidth: '40px',
+                      textAlign: 'right'
+                    }}>
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Correlation Insights */}
+              {intelligenceData.correlationInsights
+                ?.length > 0 && (
+                <div style={{
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{
+                    background: '#F8FAFC',
+                    padding: '12px 16px',
+                    borderBottom: '1px solid #E2E8F0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <svg width="16" height="16"
+                      viewBox="0 0 24 24" fill="none"
+                      stroke="#7C3AED" strokeWidth="2">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                    </svg>
+                    <span style={{
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      color: '#0F172A'
+                    }}>
+                      Correlation Insights
+                    </span>
+                    <span style={{
+                      marginLeft: 'auto',
+                      fontSize: '11px',
+                      color: '#7C3AED',
+                      fontWeight: '500'
+                    }}>
+                      {intelligenceData
+                        .correlationInsights.length} found
+                    </span>
+                  </div>
+                  {intelligenceData.correlationInsights
+                    .slice(0, 4)
+                    .map((insight, i) => (
+                    <div key={i} style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '12px 16px',
+                      borderBottom: i < Math.min(3,
+                        intelligenceData
+                          .correlationInsights.length - 1)
+                        ? '1px solid #F1F5F9'
+                        : 'none',
+                      background: 'white'
+                    }}>
+                      <div style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: '#7C3AED',
+                        marginTop: '6px',
+                        flexShrink: 0
+                      }}/>
+                      <span style={{
+                        fontSize: '13px',
+                        color: '#475569',
+                        lineHeight: '1.5'
+                      }}>
+                        {typeof insight === 'string'
+                          ? insight
+                          : JSON.stringify(insight)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Success Message */}
+              {intelligenceData.cleaned && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: '#DCFCE7',
+                  border: '1px solid #BBF7D0',
+                  borderRadius: '10px',
+                  padding: '14px 16px',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    background: '#16A34A',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '16px',
+                    flexShrink: 0
+                  }}>
+                    ✓
+                  </div>
+                  <div>
+                    <div style={{
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      color: '#16A34A'
+                    }}>
+                      Dataset Cleaned Successfully
+                    </div>
+                    <div style={{
+                      fontSize: '12px',
+                      color: '#166534',
+                      marginTop: '2px'
+                    }}>
+                      Missing values filled, duplicates 
+                      removed, data normalized
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{
+                display: 'flex',
+                gap: '12px',
+                justifyContent: 'flex-end'
+              }}>
+                <button
+                  onClick={handleCleanDataset}
+                  disabled={isCleaning ||
+                    intelligenceData.cleaned}
+                  style={{
+                    padding: '10px 20px',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: '8px',
+                    background: intelligenceData.cleaned
+                      ? '#F1F5F9' : 'white',
+                    color: intelligenceData.cleaned
+                      ? '#94A3B8' : '#0F172A',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    cursor: isCleaning ||
+                      intelligenceData.cleaned
+                      ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {isCleaning ? (
+                    <>⟳ Cleaning...</>
+                  ) : intelligenceData.cleaned ? (
+                    <>✓ Already Cleaned</>
+                  ) : (
+                    <>🧹 Clean Automatically</>
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    if (
+                      (intelligenceData.missingValues > 0 ||
+                      intelligenceData.duplicates > 0 ||
+                      intelligenceData.outliers > 0) &&
+                      !intelligenceData.cleaned
+                    ) {
+                      alert(
+                        'Please clean the dataset first before continuing. Click "Clean Automatically" to fix data issues.'
+                      );
+                      return;
+                    }
+                    setShowIntelligenceModal(false);
+                  }}
+                  style={{
+                    padding: '10px 24px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    background: (
+                      intelligenceData.missingValues > 0 ||
+                      intelligenceData.duplicates > 0 ||
+                      intelligenceData.outliers > 0
+                    ) && !intelligenceData.cleaned
+                      ? '#94A3B8'
+                      : '#2563EB',
+                    color: 'white',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {(
+                    intelligenceData.missingValues > 0 ||
+                    intelligenceData.duplicates > 0 ||
+                    intelligenceData.outliers > 0
+                  ) && !intelligenceData.cleaned
+                    ? 'Clean Data First →'
+                    : 'Continue to Dashboard →'
+                  }
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDatasetInfoModal && datasetInfoData && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 2000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '16px',
+            width: '560px',
+            maxWidth: '92vw',
+            maxHeight: '85vh',
+            overflowY: 'auto',
+            boxShadow: '0 25px 80px rgba(0,0,0,0.25)'
+          }}>
+            <div style={{
+              background: 'linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%)',
+              borderRadius: '16px 16px 0 0',
+              padding: '24px 28px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div>
+                <h2 style={{
+                  fontSize: '18px',
+                  fontWeight: '700',
+                  color: 'white',
+                  margin: '0 0 4px 0'
+                }}>
+                  Dataset Information
+                </h2>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'rgba(255,255,255,0.8)',
+                  margin: 0
+                }}>
+                  {datasetInfoData.name}
+                </p>
+              </div>
+              </div>
+
+            <div style={{ padding: '24px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '12px',
+                marginBottom: '20px'
+              }}>
+                {[
+                  {
+                    label: 'Total Rows',
+                    value: (datasetInfoData.row_count || 0)
+                      .toLocaleString(),
+                    color: '#2563EB',
+                    bg: '#EFF6FF'
+                  },
+                  {
+                    label: 'Total Columns',
+                    value: datasetInfoData.column_count || 0,
+                    color: '#7C3AED',
+                    bg: '#F5F3FF'
+                  },
+                  {
+                    label: 'File Type',
+                    value: datasetInfoData.type || 'CSV',
+                    color: '#16A34A',
+                    bg: '#F0FDF4'
+                  },
+                  {
+                    label: 'Uploaded',
+                    value: datasetInfoData.uploaded_at
+                      ? new Date(datasetInfoData.uploaded_at)
+                        .toLocaleDateString()
+                      : 'Today',
+                    color: '#D97706',
+                    bg: '#FFFBEB'
+                  },
+                ].map((item, i) => (
+                  <div key={i} style={{
+                    background: item.bg,
+                    border: `1px solid ${item.color}22`,
+                    borderRadius: '10px',
+                    padding: '16px',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{
+                      fontSize: '22px',
+                      fontWeight: '700',
+                      color: item.color
+                    }}>
+                      {item.value}
+                    </div>
+                    <div style={{
+                      fontSize: '12px',
+                      color: '#475569',
+                      marginTop: '4px'
+                    }}>
+                      {item.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{
+                border: '1px solid #E2E8F0',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                marginBottom: '20px'
+              }}>
+                <div style={{
+                  background: '#F8FAFC',
+                  padding: '12px 16px',
+                  borderBottom: '1px solid #E2E8F0',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  color: '#0F172A'
+                }}>
+                  Column Overview
+                </div>
+                {(datasetInfoData.columns_metadata || [])
+                  .map((col, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '10px 16px',
+                    borderBottom: i < (datasetInfoData.columns_metadata.length - 1)
+                      ? '1px solid #F1F5F9'
+                      : 'none',
+                    background: 'white'
+                  }}>
+                    <div style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '6px',
+                      background: col.type === 'numeric'
+                        ? '#EFF6FF'
+                        : col.type === 'date'
+                          ? '#FFFBEB'
+                          : '#F5F3FF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '12px',
+                      marginRight: '12px',
+                      flexShrink: 0
+                    }}>
+                      {col.type === 'numeric'
+                        ? '123'
+                        : col.type === 'date'
+                          ? '📅'
+                          : 'Abc'}
+                    </div>
+                    <span style={{
+                      fontSize: '13px',
+                      color: '#0F172A',
+                      flex: 1
+                    }}>
+                      {col.name || col}
+                    </span>
+                    <span style={{
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      borderRadius: '20px',
+                      background: col.type === 'numeric'
+                        ? '#EFF6FF'
+                        : col.type === 'date'
+                          ? '#FFFBEB'
+                          : '#F5F3FF',
+                      color: col.type === 'numeric'
+                        ? '#2563EB'
+                        : col.type === 'date'
+                          ? '#D97706'
+                          : '#7C3AED',
+                      fontWeight: '500'
+                    }}>
+                      {col.type || 'text'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{
+                display: 'flex',
+                justifyContent: 'flex-end'
+              }}>
+                <button
+                  onClick={() => 
+                    setShowDatasetInfoModal(false)
+                  }
+                  style={{
+                    padding: '10px 24px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    background: '#7C3AED',
+                    color: 'white',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showColumnStatsModal && columnStatsData && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 2000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '16px',
+            width: '750px',
+            maxWidth: '95vw',
+            maxHeight: '88vh',
+            overflowY: 'auto',
+            boxShadow: '0 25px 80px rgba(0,0,0,0.25)'
+          }}>
+            <div style={{
+              background: 'linear-gradient(135deg, #16A34A 0%, #15803D 100%)',
+              borderRadius: '16px 16px 0 0',
+              padding: '24px 28px'
+            }}>
+              <h2 style={{
+                fontSize: '18px',
+                fontWeight: '700',
+                color: 'white',
+                margin: '0 0 4px 0'
+              }}>
+                Column Statistics
+              </h2>
+              <p style={{
+                fontSize: '13px',
+                color: 'rgba(255,255,255,0.8)',
+                margin: 0
+              }}>
+                Statistical summary of all columns 
+                in the dataset
+              </p>
+            </div>
+
+            <div style={{ padding: '24px' }}>
+
+              {/* Summary cards */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3,1fr)',
+                gap: '12px',
+                marginBottom: '24px'
+              }}>
+                {[
+                  {
+                    label: 'Total Columns',
+                    value: columnStatsData.length,
+                    color: '#16A34A',
+                    bg: '#F0FDF4'
+                  },
+                  {
+                    label: 'Numeric Columns',
+                    value: columnStatsData.filter(
+                      c => c.type === 'numeric'
+                    ).length,
+                    color: '#2563EB',
+                    bg: '#EFF6FF'
+                  },
+                  {
+                    label: 'Categorical Columns',
+                    value: columnStatsData.filter(
+                      c => c.type === 'categorical'
+                    ).length,
+                    color: '#7C3AED',
+                    bg: '#F5F3FF'
+                  },
+                ].map((item, i) => (
+                  <div key={i} style={{
+                    background: item.bg,
+                    border: `1px solid ${item.color}22`,
+                    borderRadius: '10px',
+                    padding: '16px',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{
+                      fontSize: '28px',
+                      fontWeight: '700',
+                      color: item.color
+                    }}>
+                      {item.value}
+                    </div>
+                    <div style={{
+                      fontSize: '12px',
+                      color: '#475569',
+                      marginTop: '4px'
+                    }}>
+                      {item.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Numeric columns stats */}
+              {columnStatsData.filter(
+                c => c.type === 'numeric'
+              ).length > 0 && (
+                <div style={{
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{
+                    background: '#EFF6FF',
+                    padding: '12px 16px',
+                    borderBottom: '1px solid #E2E8F0',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    color: '#2563EB'
+                  }}>
+                    Numeric Columns — Statistical Summary
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{
+                      width: '100%',
+                      borderCollapse: 'collapse',
+                      fontSize: '13px'
+                    }}>
+                      <thead>
+                        <tr style={{
+                          background: '#F8FAFC'
+                        }}>
+                          {[
+                            'Column',
+                            'Missing',
+                            'Unique Values',
+                            'Min',
+                            'Max',
+                            'Mean',
+                            'Std Dev'
+                          ].map((h, i) => (
+                            <th key={i} style={{
+                              padding: '10px 14px',
+                              textAlign: 'left',
+                              fontWeight: '600',
+                              color: '#475569',
+                              borderBottom: '1px solid #E2E8F0',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {columnStatsData
+                          .filter(c => c.type === 'numeric')
+                          .map((col, i) => (
+                          <tr key={i} style={{
+                            borderBottom: '1px solid #F1F5F9',
+                            background: i%2===0
+                              ? 'white' : '#FAFAFA'
+                          }}>
+                            <td style={{
+                              padding: '10px 14px',
+                              fontWeight: '600',
+                              color: '#0F172A'
+                            }}>
+                              {col.name}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: (col.null_count||0) > 0
+                                ? '#D97706' : '#16A34A',
+                              fontWeight: '500'
+                            }}>
+                              {col.null_count || 0}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: '#475569'
+                            }}>
+                              {col.unique_count || '-'}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: '#2563EB',
+                              fontWeight: '500'
+                            }}>
+                              {col.min !== undefined && col.min !== null
+                                ? Number(col.min).toFixed(2)
+                                : 'N/A'}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: '#2563EB',
+                              fontWeight: '500'
+                            }}>
+                              {col.max !== undefined && col.max !== null
+                                ? Number(col.max).toFixed(2)
+                                : 'N/A'}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: '#7C3AED',
+                              fontWeight: '500'
+                            }}>
+                              {col.mean !== undefined && col.mean !== null
+                                ? Number(col.mean).toFixed(2)
+                                : 'N/A'}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              color: '#475569'
+                            }}>
+                              {col.std !== undefined && col.std !== null
+                                ? Number(col.std).toFixed(2)
+                                : 'N/A'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Categorical columns */}
+              {columnStatsData.filter(
+                c => c.type === 'categorical'
+              ).length > 0 && (
+                <div style={{
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{
+                    background: '#F5F3FF',
+                    padding: '12px 16px',
+                    borderBottom: '1px solid #E2E8F0',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    color: '#7C3AED'
+                  }}>
+                    Categorical Columns — Summary
+                  </div>
+                  <table style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: '13px'
+                  }}>
+                    <thead>
+                      <tr style={{
+                        background: '#F8FAFC'
+                      }}>
+                        {[
+                          'Column',
+                          'Missing',
+                          'Unique Values',
+                          'Type',
+                          'Sample Values'
+                        ].map((h, i) => (
+                          <th key={i} style={{
+                            padding: '10px 14px',
+                            textAlign: 'left',
+                            fontWeight: '600',
+                            color: '#475569',
+                            borderBottom: '1px solid #E2E8F0'
+                          }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {columnStatsData
+                        .filter(c => c.type === 'categorical')
+                        .map((col, i) => (
+                        <tr key={i} style={{
+                          borderBottom: '1px solid #F1F5F9',
+                          background: i%2===0
+                            ? 'white' : '#FAFAFA'
+                        }}>
+                          <td style={{
+                            padding: '10px 14px',
+                            fontWeight: '600',
+                            color: '#0F172A'
+                          }}>
+                            {col.name}
+                          </td>
+                          <td style={{
+                            padding: '10px 14px',
+                            color: (col.null_count||0) > 0
+                              ? '#D97706' : '#16A34A',
+                            fontWeight: '500'
+                          }}>
+                            {col.null_count || 0}
+                          </td>
+                          <td style={{
+                            padding: '10px 14px',
+                            color: '#475569'
+                          }}>
+                            {col.unique_count || '-'}
+                          </td>
+                          <td style={{
+                            padding: '10px 14px'
+                          }}>
+                            <span style={{
+                              fontSize: '11px',
+                              padding: '2px 8px',
+                              borderRadius: '20px',
+                              background: '#F5F3FF',
+                              color: '#7C3AED',
+                              fontWeight: '500'
+                            }}>
+                              categorical
+                            </span>
+                          </td>
+                          <td style={{
+                            padding: '10px 14px',
+                            color: '#475569',
+                            fontSize: '12px'
+                          }}>
+                            {col.sample_values
+                              ? [...new Set(col.sample_values)]
+                                  .slice(0, 3)
+                                  .join(', ')
+                              : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{
+                display: 'flex',
+                justifyContent: 'flex-end'
+              }}>
+                <button
+                  onClick={() => 
+                    setShowColumnStatsModal(false)
+                  }
+                  style={{
+                    padding: '10px 24px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    background: '#16A34A',
+                    color: 'white',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 3000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '12px',
+            padding: '32px',
+            width: '440px',
+            maxWidth: '90vw',
+            boxShadow: '0 25px 80px rgba(0,0,0,0.25)'
+          }}>
+            <h2 style={{
+              fontSize: '18px',
+              fontWeight: '700',
+              color: '#0F172A',
+              margin: '0 0 8px 0'
+            }}>
+              Save Report
+            </h2>
+            <p style={{
+              fontSize: '13px',
+              color: '#475569',
+              margin: '0 0 24px 0'
+            }}>
+              Give your report a name to save it. It will appear in your Recent Reports on the home page.
+            </p>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{
+                display: 'block',
+                fontSize: '13px',
+                fontWeight: '500',
+                color: '#0F172A',
+                marginBottom: '6px'
+              }}>
+                Report Name
+              </label>
+              <input
+                type="text"
+                value={reportName}
+                onChange={e => setReportName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleSaveReport(reportName);
+                  }
+                }}
+                placeholder={`${datasetName || 'My'} Analysis Report`}
+                autoFocus
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{
+              background: '#F8FAFC',
+              border: '1px solid #E2E8F0',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              marginBottom: '24px',
+              fontSize: '12px',
+              color: '#475569'
+            }}>
+              <div style={{ marginBottom: '4px' }}>📊 Charts: {charts.length}</div>
+              <div style={{ marginBottom: '4px' }}>📁 Dataset: {datasetName || 'None'}</div>
+              <div>🕒 {new Date().toLocaleString()}</div>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              gap: '10px',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={() => {
+                  setShowSaveModal(false);
+                  setReportName('');
+                  navigate('/');
+                }}
+                style={{
+                  padding: '10px 16px',
+                  background: '#FEF2F2',
+                  color: '#DC2626',
+                  border: '1px solid #FECACA',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontWeight: '500'
+                }}
+              >
+                Don't Save
+              </button>
+              <button
+                onClick={() => {
+                  setShowSaveModal(false);
+                  setReportName('');
+                }}
+                style={{
+                  padding: '10px 16px',
+                  background: '#F1F5F9',
+                  color: '#0F172A',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleSaveReport(reportName || `${datasetName || 'My'} Analysis Report`)}
+                disabled={isSaving}
+                style={{
+                  padding: '10px 20px',
+                  background: '#2563EB',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: isSaving ? 'not-allowed' : 'pointer',
+                  opacity: isSaving ? 0.7 : 1
+                }}
+              >
+                {isSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

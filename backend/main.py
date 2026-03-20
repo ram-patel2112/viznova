@@ -6,12 +6,20 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from database import Base, engine, SessionLocal
+from models.models import (
+    Dataset as DatasetModel, 
+    Report as ReportModel
+)
+
 from services.dataset_service import DatasetService
 from analytics.insight_service import InsightService
 from analytics.nlq_service import NLQService
 from analytics.predictive_service import PredictiveService
 
 app = FastAPI(title="VIZNOVA Backend")
+
+Base.metadata.create_all(bind=engine)
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,6 +96,25 @@ async def upload_dataset(file: UploadFile = File(...)):
     }
     datasets[ds_id] = dataset
 
+    try:
+        db = SessionLocal()
+        db_dataset = DatasetModel(
+            filename=safe_name,
+            upload_date=datetime.utcnow(),
+            columns_metadata=meta["columns"],
+            summary_stats={
+                "row_count": meta["row_count"],
+                "col_count": meta["col_count"],
+            },
+            file_path=file_path
+        )
+        db.add(db_dataset)
+        db.commit()
+        db.refresh(db_dataset)
+        db.close()
+    except Exception as e:
+        print(f"DB save failed: {e}")
+
     return {
         "id": ds_id,
         "name": safe_name,
@@ -115,7 +142,70 @@ async def list_datasets():
 
 @app.get("/recent-datasets")
 async def recent_datasets():
-    return list(datasets.values())[-5:]
+    try:
+        db = SessionLocal()
+        db_datasets = db.query(DatasetModel)\
+            .order_by(DatasetModel.upload_date.desc())\
+            .limit(10)\
+            .all()
+        db.close()
+        
+        result = []
+        for ds in db_datasets:
+            ds_id = None
+            for key, val in datasets.items():
+                if val["name"] == ds.filename:
+                    ds_id = key
+                    break
+            
+            result.append({
+                "id": ds_id or ds.id,
+                "name": ds.filename,
+                "type": "CSV" if ds.filename.endswith(".csv") else "Excel",
+                "uploaded_at": ds.upload_date.isoformat() if ds.upload_date else None,
+                "row_count": ds.summary_stats.get("row_count") if ds.summary_stats else None,
+                "column_count": ds.summary_stats.get("col_count") if ds.summary_stats else None,
+            })
+        return result
+    except Exception as e:
+        print(f"Recent datasets error: {e}")
+        return list(datasets.values())[-5:]
+
+
+@app.delete("/datasets/{dataset_id}")
+async def delete_dataset(dataset_id: int):
+    try:
+        db = SessionLocal()
+        db_dataset = db.query(DatasetModel)\
+            .filter(DatasetModel.id == dataset_id)\
+            .first()
+        
+        if not db_dataset:
+            raise HTTPException(
+                status_code=404, 
+                detail="Dataset not found"
+            )
+        
+        if db_dataset.file_path and \
+           os.path.exists(db_dataset.file_path):
+            os.remove(db_dataset.file_path)
+        
+        db.delete(db_dataset)
+        db.commit()
+        db.close()
+        
+        if dataset_id in datasets:
+            del datasets[dataset_id]
+        
+        return {"message": "Dataset deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=str(e)
+        )
+
 
 
 # ─── Dataset Detail ─────────────────────────────────
@@ -298,3 +388,138 @@ async def get_clusters(dataset_id: int, k: int = Query(3)):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reports")
+async def get_reports():
+    try:
+        db = SessionLocal()
+        reports = db.query(ReportModel)\
+            .order_by(
+                ReportModel.updated_at.desc()
+            )\
+            .limit(10)\
+            .all()
+        db.close()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "dataset_name": r.dataset_name,
+                "charts_count": len(
+                    r.charts or []
+                ),
+                "created_at": r.created_at
+                    .isoformat()
+                    if r.created_at else None,
+                "updated_at": r.updated_at
+                    .isoformat()
+                    if r.updated_at else None,
+            }
+            for r in reports
+        ]
+    except Exception as e:
+        print(f"Reports error: {e}")
+        return []
+
+@app.post("/reports")
+async def save_report(report: dict):
+    try:
+        db = SessionLocal()
+        db_report = ReportModel(
+            name=report.get(
+                "name", "Untitled Report"
+            ),
+            dataset_id=report.get("dataset_id"),
+            dataset_name=report.get(
+                "dataset_name"
+            ),
+            charts=report.get("charts", []),
+            results_panel=report.get(
+                "results_panel"
+            ),
+            columns_metadata=report.get(
+                "columns_metadata"
+            ),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(db_report)
+        db.commit()
+        db.refresh(db_report)
+        report_id = db_report.id
+        db.close()
+        return {
+            "id": report_id,
+            "message": "Report saved successfully"
+        }
+    except Exception as e:
+        print(f"Save report error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@app.get("/reports/{report_id}")
+async def get_report(report_id: int):
+    try:
+        db = SessionLocal()
+        report = db.query(ReportModel)\
+            .filter(
+                ReportModel.id == report_id
+            )\
+            .first()
+        db.close()
+        if not report:
+            raise HTTPException(
+                status_code=404,
+                detail="Report not found"
+            )
+        return {
+            "id": report.id,
+            "name": report.name,
+            "dataset_id": report.dataset_id,
+            "dataset_name": report.dataset_name,
+            "charts": report.charts or [],
+            "results_panel": report.results_panel,
+            "columns_metadata": 
+                report.columns_metadata or [],
+            "created_at": report.created_at
+                .isoformat()
+                if report.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@app.delete("/reports/{report_id}")
+async def delete_report(report_id: int):
+    try:
+        db = SessionLocal()
+        report = db.query(ReportModel)\
+            .filter(
+                ReportModel.id == report_id
+            )\
+            .first()
+        if not report:
+            raise HTTPException(
+                status_code=404,
+                detail="Report not found"
+            )
+        db.delete(report)
+        db.commit()
+        db.close()
+        return {
+            "message": "Report deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
