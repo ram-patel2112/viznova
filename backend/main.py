@@ -208,10 +208,51 @@ async def delete_dataset(dataset_id: int):
 
 
 
+# ─── Dataset Helper ──────────────────────────────────
+def get_dataset_or_404(dataset_id: int):
+    ds = datasets.get(dataset_id)
+    if ds:
+        return ds
+    
+    try:
+        db = SessionLocal()
+        db_ds = db.query(DatasetModel)\
+            .filter(
+                DatasetModel.id == dataset_id
+            ).first()
+        db.close()
+        
+        if db_ds and db_ds.file_path and \
+                os.path.exists(db_ds.file_path):
+            restored = {
+                "id": db_ds.id,
+                "name": db_ds.filename,
+                "file_path": db_ds.file_path,
+                "type": "CSV",
+                "columns_metadata": 
+                    db_ds.columns_metadata or [],
+                "row_count": (
+                    db_ds.summary_stats or {}
+                ).get("row_count", 0),
+                "column_count": (
+                    db_ds.summary_stats or {}
+                ).get("col_count", 0),
+                "preprocessing_summary": {},
+                "quality_metrics": {},
+                "correlation_insights": []
+            }
+            datasets[dataset_id] = restored
+            return restored
+    except Exception as e:
+        print(f"DB lookup failed: {e}")
+    
+    return None
+
+
 # ─── Dataset Detail ─────────────────────────────────
 @app.get("/datasets/{dataset_id}")
 async def get_dataset(dataset_id: int):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return ds
@@ -225,7 +266,7 @@ async def get_chart_data(
     y: str = Query(...),
     chart_type: str = Query("bar"),
 ):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -248,7 +289,7 @@ async def get_chart_image(
     show_anomalies: bool = False,
     show_clusters: bool = False,
 ):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -266,19 +307,37 @@ async def get_chart_image(
 
 
 # ─── Chart Recommendation ───────────────────────────
-@app.get("/datasets/{dataset_id}/recommend-chart")
-async def recommend_chart(dataset_id: int, x: str = Query(...), y: str = Query(None)):
-    ds = datasets.get(dataset_id)
-    if not ds:
-        raise HTTPException(status_code=404, detail="Dataset not found")
     chart_type = await DatasetService.recommend_chart(ds["file_path"], x, y)
     return {"chart_type": chart_type}
+
+
+@app.get("/datasets/{dataset_id}/auto-charts")
+async def auto_generate_charts(
+    dataset_id: int
+):
+    ds = get_dataset_or_404(dataset_id)
+    if not ds:
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset not found"
+        )
+    try:
+        configs = await DatasetService\
+            .auto_generate_charts(
+                ds["file_path"]
+            )
+        return {"charts": configs}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 # ─── Clean Dataset ──────────────────────────────────
 @app.post("/datasets/{dataset_id}/clean")
 async def clean_dataset(dataset_id: int):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -301,7 +360,7 @@ class QueryRequest(BaseModel):
 
 @app.post("/datasets/{dataset_id}/query")
 async def query_dataset(dataset_id: int, req: QueryRequest):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -335,7 +394,7 @@ async def query_dataset(dataset_id: int, req: QueryRequest):
 # ─── Intelligence Story ─────────────────────────────
 @app.get("/datasets/{dataset_id}/story")
 async def get_story(dataset_id: int):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -349,7 +408,7 @@ async def get_story(dataset_id: int):
 # ─── Forecast ───────────────────────────────────────
 @app.get("/datasets/{dataset_id}/forecast")
 async def get_forecast(dataset_id: int, x: str = Query(...), y: str = Query(...), periods: int = Query(5)):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -363,7 +422,7 @@ async def get_forecast(dataset_id: int, x: str = Query(...), y: str = Query(...)
 # ─── Anomalies ──────────────────────────────────────
 @app.get("/datasets/{dataset_id}/anomalies")
 async def get_anomalies(dataset_id: int):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -378,7 +437,7 @@ async def get_anomalies(dataset_id: int):
 # ─── Clusters ───────────────────────────────────────
 @app.get("/datasets/{dataset_id}/clusters")
 async def get_clusters(dataset_id: int, k: int = Query(3)):
-    ds = datasets.get(dataset_id)
+    ds = get_dataset_or_404(dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     try:
@@ -518,6 +577,111 @@ async def delete_report(report_id: int):
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# ─── Sample Dataset Loader ──────────────────────────
+@app.get("/sample/{filename}")
+async def load_sample_dataset(filename: str):
+    allowed_files = [
+        "Cars_data.csv",
+        "example_sales.csv"
+    ]
+
+    if filename not in allowed_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid sample file"
+        )
+
+    from pathlib import Path
+
+    root_path = Path(__file__).parent.parent
+    sample_path = root_path / filename
+
+    if not sample_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{filename} not found in project root"
+        )
+
+    try:
+        os.makedirs("uploads", exist_ok=True)
+        dest_path = os.path.join(
+            "uploads", filename
+        )
+        shutil.copy2(str(sample_path), dest_path)
+
+        meta = await DatasetService\
+            .process_dataset(dest_path)
+
+        ds_id = len(datasets) + 1
+        datasets[ds_id] = {
+            "id": ds_id,
+            "name": filename,
+            "file_path": dest_path,
+            "type": "CSV",
+            "columns_metadata": meta["columns"],
+            "row_count": meta["row_count"],
+            "column_count": meta["col_count"],
+            "preprocessing_summary": {
+                "missing_values_filled": 0,
+                "duplicates_removed": 0
+            },
+            "quality_metrics": meta.get(
+                "quality_metrics", {}
+            ),
+            "correlation_insights": meta.get(
+                "correlation_insights", []
+            )
+        }
+
+        try:
+            db = SessionLocal()
+            existing = db.query(DatasetModel)\
+                .filter(
+                    DatasetModel.filename == filename
+                ).first()
+
+            if not existing:
+                db_dataset = DatasetModel(
+                    filename=filename,
+                    upload_date=datetime.utcnow(),
+                    columns_metadata=meta["columns"],
+                    summary_stats={
+                        "row_count": meta["row_count"],
+                        "col_count": meta["col_count"]
+                    },
+                    file_path=dest_path
+                )
+                db.add(db_dataset)
+                db.commit()
+            db.close()
+        except Exception as e:
+            print(f"DB save failed: {e}")
+
+        return {
+            "id": ds_id,
+            "name": filename,
+            "row_count": meta["row_count"],
+            "column_count": meta["col_count"],
+            "columns_metadata": meta["columns"],
+            "preprocessing_summary": {
+                "missing_values_filled": 0,
+                "duplicates_removed": 0
+            },
+            "quality_metrics": meta.get(
+                "quality_metrics", {}
+            ),
+            "correlation_insights": meta.get(
+                "correlation_insights", []
+            )
+        }
+
     except Exception as e:
         raise HTTPException(
             status_code=500,

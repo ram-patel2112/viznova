@@ -1,6 +1,9 @@
 fastapi
 uvicorn
 sqlalchemy
+orjson
+plotly
+kaleido
 pandas
 scikit-learn
 python-multipart

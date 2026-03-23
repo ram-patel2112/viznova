@@ -50,7 +50,7 @@ const Dashboard = () => {
   );
 
   const [activeTab, setActiveTab] = useState('Home');
-  const [layout, setLayout] = useState('2 Columns');
+  const [layout, setLayout] = useState('2');
   
   const [charts, setCharts] = useState([]);
   const [columns, setColumns] = useState(datasetId ? ['Column 1', 'Column 2', 'Column 3'] : []);
@@ -81,6 +81,7 @@ const Dashboard = () => {
   const [showIntelligenceModal, setShowIntelligenceModal] = useState(false);
   const [intelligenceData, setIntelligenceData] = useState(null);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
 
   const [showDatasetInfoModal, setShowDatasetInfoModal] = useState(false);
   const [showColumnStatsModal, setShowColumnStatsModal] = useState(false);
@@ -93,6 +94,9 @@ const Dashboard = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [savedReportId, setSavedReportId] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  const [showVisualizationsPanel, setShowVisualizationsPanel] = useState(true);
+  const [showDataPanel, setShowDataPanel] = useState(true);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(
@@ -298,221 +302,304 @@ const Dashboard = () => {
   };
 
   const handleAnalyze = async (title) => {
-    if (!datasetId) return;
-    
-    setResultsPanel({ 
-      isOpen: true, 
-      title, 
-      content: '', 
-      status: 'loading' 
+    if (!datasetId) {
+      setResultsPanel({
+        isOpen: true,
+        title: 'No Dataset',
+        content: 'Please upload a dataset first.',
+        status: 'error'
+      });
+      return;
+    }
+
+    const getNumericColumns = () => {
+      return columns.filter(col => {
+        if (!col) return false;
+        const colName = typeof col === 'string'
+          ? col : col.name || '';
+        const lowerCol = colName.toLowerCase();
+        const skipWords = [
+          'id', 'code', 'index', 'no'
+        ];
+        return !skipWords.some(
+          w => lowerCol === w
+        );
+      });
+    };
+
+    const getChartColumns = () => {
+      if (selectedChart && 
+          selectedChart.x && 
+          selectedChart.y &&
+          selectedChart.y !== 'count') {
+        return {
+          x: selectedChart.x,
+          y: selectedChart.y,
+          fromChart: true,
+          chartTitle: selectedChart.title
+        };
+      }
+      const cols = getNumericColumns();
+      return {
+        x: cols[0] || columns[0] || '',
+        y: cols[1] || cols[0] || 
+           columns[0] || '',
+        fromChart: false,
+        chartTitle: null
+      };
+    };
+
+    setResultsPanel({
+      isOpen: true,
+      title: title,
+      content: 'Analyzing...',
+      status: 'loading'
     });
-    
+
     try {
       let response;
       let data;
-      
+      const { x, y, fromChart, chartTitle } =
+        getChartColumns();
+
       if (title === 'Forecast Analysis') {
-        if (!selectedChart) {
+        if (!y || y === 'count') {
           setResultsPanel({
             isOpen: true,
-            title,
-            content: 'Please select a chart first to run forecast.',
+            title: 'Forecast Not Available',
+            content: 'Forecast requires a numeric Y-axis column. Please select a chart with numeric data (Bar, Line, Scatter) and try again.',
             status: 'error'
           });
           return;
         }
+
         response = await fetch(
-          `http://localhost:8000/datasets/${datasetId}/forecast?x=${encodeURIComponent(selectedChart.x)}&y=${encodeURIComponent(selectedChart.y)}&periods=5`
+          `http://localhost:8000/datasets/${datasetId}/forecast?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}&periods=5`
         );
         data = await response.json();
+        
+        const panelTitle = fromChart
+          ? `Forecast — ${chartTitle}`
+          : 'Forecast Analysis (Dataset)';
+        
         setResultsPanel({
           isOpen: true,
-          title: 'Forecast Analysis',
-          content: data.explanation 
-            || data.insight 
+          title: panelTitle,
+          content: data.explanation
+            || data.insight
             || 'Forecast complete.',
-          image: data.image_base64 || data.image || null,
-          mimeType: data.mime_type || 'image/png',
           status: 'success'
         });
       }
-      
-      else if (title === 'Anomaly Detection') {
+
+      else if (
+        title === 'Anomaly Detection'
+      ) {
+        if (!y || y === 'count') {
+          setResultsPanel({
+            isOpen: true,
+            title: 'Anomaly Detection Not Available',
+            content: 'Anomaly Detection requires a numeric column. Please select a chart with numeric data and try again.',
+            status: 'error'
+          });
+          return;
+        }
+
         response = await fetch(
-          `http://localhost:8000/datasets/${datasetId}/anomalies`
+          `http://localhost:8000/datasets/${datasetId}/anomalies?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}`
         );
         data = await response.json();
+        
+        const panelTitle = fromChart
+          ? `Anomaly Detection — ${chartTitle}`
+          : 'Anomaly Detection (Dataset)';
+        
         setResultsPanel({
           isOpen: true,
-          title: 'Anomaly Detection',
-          content: data.explanation 
-            || data.insight 
+          title: panelTitle,
+          content: data.explanation
+            || data.insight
             || 'Anomaly detection complete.',
-          image: data.image_base64 || data.image || null,
-          mimeType: data.mime_type || 'image/png',
           status: 'success'
         });
       }
-      
-      else if (title === 'K-Means Cluster') {
+
+      else if (
+        title === 'K-Means Cluster'
+      ) {
+        const numCols = getNumericColumns();
+        
+        if (numCols.length < 2) {
+          setResultsPanel({
+            isOpen: true,
+            title: 'Clustering Not Available',
+            content: 'K-Means Clustering requires at least 2 numeric columns in your dataset.',
+            status: 'error'
+          });
+          return;
+        }
+
         response = await fetch(
           `http://localhost:8000/datasets/${datasetId}/clusters?k=3`
         );
         data = await response.json();
+        
         setResultsPanel({
           isOpen: true,
-          title: 'Clustering Analysis',
-          content: data.explanation 
-            || data.insight 
+          title: 'K-Means Clustering',
+          content: data.explanation
+            || data.insight
             || 'Clustering complete.',
-          image: data.image_base64 || data.image || null,
-          mimeType: data.mime_type || 'image/png',
           status: 'success'
         });
       }
-      
-      else if (title === 'Semantic Insight') {
+
+      else if (
+        title === 'Semantic Insight'
+      ) {
         response = await fetch(
           `http://localhost:8000/datasets/${datasetId}/story`
         );
         data = await response.json();
+        
+        const panelTitle = fromChart
+          ? `Insight — ${chartTitle}`
+          : 'Semantic Insight';
+        
         setResultsPanel({
           isOpen: true,
-          title: 'Insight Story',
-          content: data.story || 'No insights available.',
+          title: panelTitle,
+          content: data.story
+            || data.explanation
+            || 'Insight generation complete.',
           status: 'success'
         });
       }
-      
+
       else if (title === 'Natural Language Query') {
-        if (!nlqQuery.trim()) return;
-        
-        const response = await fetch(
+        if (!nlqQuery.trim()) {
+          setResultsPanel({
+            isOpen: true,
+            title: 'NLQ',
+            content: 'Please enter a query.',
+            status: 'error'
+          });
+          return;
+        }
+
+        response = await fetch(
           `http://localhost:8000/datasets/${datasetId}/query`,
           {
             method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json' 
+            headers: {
+              'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ query: nlqQuery })
+            body: JSON.stringify({
+              query: nlqQuery
+            })
           }
         );
         data = await response.json();
         
-        const chartX = data.entities?.x_axis || '';
-        const chartY = data.entities?.y_axis || '';
-        const chartType = data.entities?.chart_type || 'bar';
-        
-        let chartImage = data.result?.image_base64 
-          || data.result?.image 
-          || null;
-        
-        if (!chartImage && chartX && chartY) {
-          try {
-            const imgResponse = await fetch(
-              `http://localhost:8000/datasets/${datasetId}/chart-image?x=${encodeURIComponent(chartX)}&y=${encodeURIComponent(chartY)}&chart_type=${chartType}`
-            );
-            const imgData = await imgResponse.json();
-            chartImage = imgData.image_base64 
-              || imgData.image 
-              || null;
-          } catch (e) {
-            console.log('Chart image fetch failed:', e);
-          }
-        }
-        
-        if (chartX && chartY) {
+        const entities = data.entities || {};
+        const chartType = entities.chart_type
+          || 'bar';
+        const xAxis = entities.x_axis || x;
+        const yAxis = entities.y_axis || y;
+
+        try {
+          const chartResponse = await fetch(
+            `http://localhost:8000/datasets/${datasetId}/chart-image?x=${encodeURIComponent(xAxis)}&y=${encodeURIComponent(yAxis)}&chart_type=${encodeURIComponent(chartType)}`
+          );
+          const chartData = 
+            await chartResponse.json();
+          
           const newChart = {
             id: Date.now(),
-            title: data.result?.title 
-              || `${chartType} - ${chartY} by ${chartX}`,
-            image: chartImage,
-            insight: data.result?.insight || '',
+            title: data.result?.title
+              || `${yAxis} by ${xAxis}`,
+            image: chartData.image_base64
+              || chartData.image
+              || null,
+            insight: data.result?.insight
+              || '',
             chartType: chartType,
-            x: chartX,
-            y: chartY
+            x: xAxis,
+            y: yAxis
           };
+          
           setCharts(prev => [...prev, newChart]);
           setHasUnsavedChanges(true);
+          
+          setResultsPanel({
+            isOpen: true,
+            title: 'NLQ Result',
+            content: data.result?.insight
+              || 'Chart generated from your query.',
+            status: 'success'
+          });
+        } catch(e) {
+          setResultsPanel({
+            isOpen: true,
+            title: 'NLQ Result',
+            content: data.result?.insight
+              || 'Query processed.',
+            status: 'success'
+          });
         }
-        
-        setResultsPanel({
-          isOpen: true,
-          title: 'Query Result',
-          content: data.result?.insight || 
-            'Query processed successfully.',
-          status: 'success'
-        });
-        setNlqQuery('');
       }
-      
-      else if (title === 'Insight Story') {
+
+      else if (
+        title === 'Insight Story'
+      ) {
         response = await fetch(
           `http://localhost:8000/datasets/${datasetId}/story`
         );
         data = await response.json();
+        
         setResultsPanel({
           isOpen: true,
           title: 'Insight Story',
-          content: data.story || 'No story available.',
+          content: data.story
+            || data.explanation
+            || 'Story generation complete.',
           status: 'success'
         });
       }
-      
-      else if (title === 'Smart Recommend') {
-        const response = await fetch(
+
+      else if (
+        title === 'Smart Recommend'
+      ) {
+        response = await fetch(
           `http://localhost:8000/datasets/${datasetId}/story`
         );
         data = await response.json();
         
-        const numericCols = columns.filter(col => {
-          const colObj = columns.find(c => c === col);
-          return colObj;
-        });
-        
-        const recommendations = [];
-        
-        if (columns.length >= 2) {
-          recommendations.push(
-            `Recommended Visualizations for your dataset:\n`
-          );
-          recommendations.push(
-            `1. Bar Chart: Compare values across ${columns[0]} categories`
-          );
-          recommendations.push(
-            `2. Line Chart: Show trends over time using ${columns[1]}`
-          );
-          if (columns.length >= 3) {
-            recommendations.push(
-              `3. Scatter Plot: Explore relationship between ${columns[1]} and ${columns[2]}`
-            );
-          }
-          if (columns.length >= 4) {
-            recommendations.push(
-              `4. Pie Chart: Show distribution of ${columns[0]}`
-            );
-          }
-          recommendations.push(
-            `\nAI Story Analysis:\n${data.story || 'Analysis complete.'}`
-          );
-        }
+        const recommendations = columns
+          .slice(0, 5)
+          .map((col, i) => {
+            const colName = typeof col === 'string'
+              ? col : col.name || col;
+            return `${i+1}. Analyze "${colName}" for deeper insights`;
+          })
+          .join('\n');
         
         setResultsPanel({
           isOpen: true,
           title: 'Smart Recommendations',
-          content: recommendations.join('\n') 
-            || data.story 
-            || 'No recommendations available.',
+          content: (data.story || '') + 
+            '\n\nRecommended columns to explore:\n' +
+            recommendations,
           status: 'success'
         });
       }
-      
-    } catch (error) {
-      console.error('Analysis error:', error);
+
+    } catch(e) {
+      console.error('Analytics error:', e);
       setResultsPanel({
         isOpen: true,
-        title,
-        content: `Error: ${error.message}`,
+        title: title,
+        content: `Analysis failed: ${e.message}. Please try again.`,
         status: 'error'
       });
     }
@@ -617,8 +704,112 @@ const Dashboard = () => {
             </div>
             <div className="custom-ribbon-group">
               <div className="custom-ribbon-buttons-row">
-                <div style={{ fontSize: '12px', color: '#475569', padding: '0 8px' }}>
-                  Customize report blocks
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  alignItems: 'center'
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    gap: '4px'
+                  }}>
+                    <button
+                      onClick={() => setLayout('1')}
+                      title="1 Column"
+                      style={{
+                        width: '32px',
+                        height: '28px',
+                        border: layout === '1'
+                          ? '2px solid #2563EB'
+                          : '1px solid #E2E8F0',
+                        borderRadius: '4px',
+                        background: layout === '1'
+                          ? '#EFF6FF' : 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '3px'
+                      }}
+                    >
+                      <div style={{
+                        width: '100%',
+                        height: '100%',
+                        background: layout === '1'
+                          ? '#2563EB' : '#CBD5E1',
+                        borderRadius: '2px'
+                      }}/>
+                    </button>
+
+                    <button
+                      onClick={() => setLayout('2')}
+                      title="2 Columns"
+                      style={{
+                        width: '32px',
+                        height: '28px',
+                        border: layout === '2'
+                          ? '2px solid #2563EB'
+                          : '1px solid #E2E8F0',
+                        borderRadius: '4px',
+                        background: layout === '2'
+                          ? '#EFF6FF' : 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '2px',
+                        padding: '3px'
+                      }}
+                    >
+                      {[0,1].map(i => (
+                        <div key={i} style={{
+                          flex: 1,
+                          height: '100%',
+                          background: layout === '2'
+                            ? '#2563EB' : '#CBD5E1',
+                          borderRadius: '2px'
+                        }}/>
+                      ))}
+                    </button>
+
+                    <button
+                      onClick={() => setLayout('3')}
+                      title="3 Columns"
+                      style={{
+                        width: '32px',
+                        height: '28px',
+                        border: layout === '3'
+                          ? '2px solid #2563EB'
+                          : '1px solid #E2E8F0',
+                        borderRadius: '4px',
+                        background: layout === '3'
+                          ? '#EFF6FF' : 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '2px',
+                        padding: '3px'
+                      }}
+                    >
+                      {[0,1,2].map(i => (
+                        <div key={i} style={{
+                          flex: 1,
+                          height: '100%',
+                          background: layout === '3'
+                            ? '#2563EB' : '#CBD5E1',
+                          borderRadius: '2px'
+                        }}/>
+                      ))}
+                    </button>
+                  </div>
+                  <span style={{
+                    fontSize: '10px',
+                    color: '#475569'
+                  }}>
+                    Layout
+                  </span>
                 </div>
               </div>
               <div className="custom-ribbon-label">Layout</div>
@@ -830,9 +1021,17 @@ const Dashboard = () => {
                 <div 
                   className={`custom-ribbon-btn ${!datasetId || charts.length === 0 ? 'disabled' : ''}`}
                   onClick={handleExportPNG}
+                  title={selectedChart
+                    ? `Export "${selectedChart.title}" as PNG`
+                    : 'Export all charts as PNG'}
                 >
                   <Icon path={icons.img} />
-                  <span>Export PNG</span>
+                  <span>
+                    {selectedChart 
+                      ? 'Export Selected' 
+                      : 'Export All PNG'
+                    }
+                  </span>
                 </div>
                 <div 
                   className={`custom-ribbon-btn ${!datasetId ? 'disabled' : ''}`}
@@ -921,20 +1120,51 @@ const Dashboard = () => {
 
   const handleExportPNG = () => {
     if (charts.length === 0) {
-      alert('Please generate at least one chart before exporting.');
+      alert(
+        'Please generate at least one chart before exporting.'
+      );
       return;
     }
-    
-    charts.forEach((chart, index) => {
-      if (chart.image) {
+
+    if (selectedChart) {
+      if (selectedChart.image) {
         const link = document.createElement('a');
-        link.href = `data:image/png;base64,${chart.image}`;
-        link.download = `${chart.title.replace(/[^a-z0-9]/gi, '_')}_${index + 1}.png`;
+        link.href = `data:image/png;base64,${selectedChart.image}`;
+        link.download = `${selectedChart.title
+          .replace(/[^a-z0-9]/gi, '_')}.png`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        
+        setResultsPanel({
+          isOpen: true,
+          title: 'Chart Exported',
+          content: `"${selectedChart.title}" has been downloaded as PNG.`,
+          status: 'success'
+        });
       }
-    });
+    } else {
+      charts.forEach((chart, index) => {
+        if (chart.image) {
+          setTimeout(() => {
+            const link = document.createElement('a');
+            link.href = `data:image/png;base64,${chart.image}`;
+            link.download = `${chart.title
+              .replace(/[^a-z0-9]/gi, '_')}_${index + 1}.png`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }, index * 300);
+        }
+      });
+
+      setResultsPanel({
+        isOpen: true,
+        title: 'Charts Exported',
+        content: `All ${charts.length} charts have been downloaded as PNG files.`,
+        status: 'success'
+      });
+    }
   };
 
   const handleDownloadReport = async () => {
@@ -1372,6 +1602,90 @@ setResultsPanel({
     }
   };
 
+  const handleAutoGenerateDashboard = async () => {
+    if (!intelligenceData?.datasetId) return;
+    
+    setIsAutoGenerating(true);
+    setShowIntelligenceModal(false);
+    
+    try {
+      const cleanResponse = await fetch(
+        `http://localhost:8000/datasets/${intelligenceData.datasetId}/clean`,
+        { method: 'POST' }
+      );
+      
+      const configResponse = await fetch(
+        `http://localhost:8000/datasets/${intelligenceData.datasetId}/auto-charts`
+      );
+      const configData = await configResponse.json();
+      const chartConfigs = configData.charts || [];
+      
+      const generatedCharts = [];
+      
+      for (const config of chartConfigs) {
+        try {
+          const chartResponse = await fetch(
+            `http://localhost:8000/datasets/${intelligenceData.datasetId}/chart-image?x=${encodeURIComponent(config.x)}&y=${encodeURIComponent(config.y)}&chart_type=${config.chart_type}`
+          );
+          const chartData = await chartResponse.json();
+          
+          let chartInsight = '';
+          try {
+            const insightResponse = await fetch(
+              `http://localhost:8000/datasets/${intelligenceData.datasetId}/query`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  query: `show ${config.y} by ${config.x}`
+                })
+              }
+            );
+            const insightData = 
+              await insightResponse.json();
+            chartInsight = 
+              insightData.result?.insight || '';
+          } catch(e) {
+            console.log('Insight failed:', e);
+          }
+          
+          generatedCharts.push({
+            id: Date.now() + 
+              Math.random(),
+            title: config.title,
+            image: chartData.image_base64 
+              || chartData.image 
+              || null,
+            insight: chartInsight,
+            chartType: config.chart_type,
+            x: config.x,
+            y: config.y
+          });
+          
+        } catch(e) {
+          console.error(
+            'Chart generation failed:', e
+          );
+        }
+      }
+      
+      if (generatedCharts.length > 0) {
+        setCharts(generatedCharts);
+        setHasUnsavedChanges(true);
+      }
+      
+    } catch(e) {
+      console.error('Auto generate error:', e);
+      alert(
+        'Auto generation failed. Please try manually.'
+      );
+    } finally {
+      setIsAutoGenerating(false);
+    }
+  };
+
   return (
     <div className="dashboard-layout">
       {/* Hidden file inputs */}
@@ -1441,15 +1755,6 @@ setResultsPanel({
             {datasetId && <option value="Loaded">{datasetName || datasetId}</option>}
           </select>
           
-          <select 
-            className="dropdown-select" 
-            value={layout}
-            onChange={(e) => setLayout(e.target.value)}
-          >
-            <option value="1 Column">1 Column</option>
-            <option value="2 Columns">2 Columns</option>
-            <option value="3 Columns">3 Columns</option>
-          </select>
         </div>
       </div>
 
@@ -1461,7 +1766,7 @@ setResultsPanel({
             className={`custom-tab ${activeTab === tab ? 'active' : ''}`}
             onClick={() => setActiveTab(tab)}
           >
-            {tab}
+            {tab === 'AI' ? 'NLQ & Insights' : tab}
           </div>
         ))}
       </div>
@@ -1473,8 +1778,51 @@ setResultsPanel({
       {/* MAIN CONTENT AREA */}
       <div className="main-content-area">
         <div className="canvas-and-results">
+          {isAutoGenerating && (
+            <div style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(255,255,255,0.85)',
+              zIndex: 1500,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '16px'
+            }}>
+              <div style={{
+                width: '60px',
+                height: '60px',
+                border: '4px solid #E2E8F0',
+                borderTop: '4px solid #7C3AED',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite'
+              }}/>
+              <div style={{
+                fontSize: '18px',
+                fontWeight: '600',
+                color: '#0F172A'
+              }}>
+                Auto Generating Dashboard
+              </div>
+              <div style={{
+                fontSize: '13px',
+                color: '#475569'
+              }}>
+                Cleaning data and generating 
+                best visualizations...
+              </div>
+            </div>
+          )}
           {/* Dashboard Canvas */}
-          <div className="dashboard-canvas">
+          <div 
+            className="dashboard-canvas"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setSelectedChart(null);
+              }
+            }}
+          >
             {!datasetId ? (
               /* No dataset - show upload area */
               <div className="empty-state-container">
@@ -1691,17 +2039,69 @@ setResultsPanel({
 
             ) : (
               /* Charts exist - show grid */
-              <div className={`charts-grid grid-${layout.split(' ')[0]}`}>
+              <div className="charts-grid" style={{
+                display: 'grid',
+                gridTemplateColumns: 
+                  layout === '1' ? '1fr' :
+                  layout === '2' ? 'repeat(2, 1fr)' :
+                  layout === '3' ? 'repeat(3, 1fr)' :
+                  'repeat(2, 1fr)',
+                gap: '16px',
+                padding: '16px'
+              }}>
                 {charts.map(chart => (
                   <div
                     key={chart.id}
                     className="chart-card"
                     onClick={() => setSelectedChart(chart)}
+                    style={{
+                      border: selectedChart?.id === chart.id
+                        ? '2px solid #2563EB'
+                        : '1px solid #E2E8F0',
+                      boxShadow: selectedChart?.id === chart.id
+                        ? '0 0 0 3px rgba(37,99,235,0.12)'
+                        : '0 2px 6px rgba(15,23,42,0.04)',
+                      cursor: 'pointer',
+                      borderRadius: '8px',
+                      background: 'white',
+                      transition: 'all 0.15s ease'
+                    }}
                   >
-                    <div className="chart-card-header">
-                      <span className="chart-card-title">
-                        {chart.title}
-                      </span>
+                    <div className="chart-card-header" style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderBottom: '1px solid #F1F5F9'
+                    }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}>
+                        {selectedChart?.id === chart.id && (
+                          <span style={{
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                            background: '#EFF6FF',
+                            color: '#2563EB',
+                            borderRadius: '4px',
+                            fontWeight: '600',
+                            border: '1px solid #BFDBFE'
+                          }}>
+                            Selected
+                          </span>
+                        )}
+                        <span className="chart-card-title"
+                          style={{
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            color: '#0F172A'
+                          }}
+                        >
+                          {chart.title}
+                        </span>
+                      </div>
                       <button
                         className="chart-card-remove"
                         onClick={(e) => {
@@ -1806,24 +2206,7 @@ setResultsPanel({
 
         {/* Right Panels */}
         <div className="right-panels">
-          {/* Filters */}
-          <div className="panel-module">
-            <div className="panel-module-header">
-              <div className="header-left">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-                </svg>
-                <span>Filters</span>
-              </div>
-              <button className="hide-btn">Hide</button>
-            </div>
-            <div className="panel-module-content">
-              <div className="filters-text">
-                Filters can be applied in natural language queries<br/>
-                Example: "show sales trend for 2024"
-              </div>
-            </div>
-          </div>
+
 
           {/* Visualizations */}
           <div className="panel-module">
@@ -1836,43 +2219,50 @@ setResultsPanel({
                 </svg>
                 <span>Visualizations</span>
               </div>
-              <button className="hide-btn">Hide</button>
+              <button
+                className="hide-btn"
+                onClick={() => setShowVisualizationsPanel(!showVisualizationsPanel)}
+              >
+                {showVisualizationsPanel ? 'Hide' : 'Show'}
+              </button>
             </div>
-            <div className="panel-module-content">
-              <div className="viz-grid">
-                {[
-                  { name: 'Bar', path: icons.bar },
-                  { name: 'Line', path: icons.line },
-                  { name: 'Pie', path: icons.pie },
-                  { name: 'Area', path: icons.area },
-                  { name: 'Histogram', path: icons.hist },
-                  { name: 'Box Plot', path: icons.box },
-                  { name: 'Scatter', path: icons.scatter },
-                  { name: 'Heatmap', path: icons.heatmap },
-                  { name: 'Donut', path: icons.donut },
-                  { name: 'Bubble', path: icons.bubble },
-                  { name: 'Waterfall', path: icons.waterfall },
-                  { name: 'Funnel', path: icons.funnel },
-                ].map((vizType) => (
-                  <div 
-                    key={vizType.name}
-                    className="viz-icon-box" 
-                    title={vizType.name}
-                    onClick={() => {
-                      if (!datasetId) return;
-                      setSelectedChartType(vizType.name);
-                      setIsChartModalOpen(true);
-                    }}
-                    style={{ 
-                      opacity: datasetId ? 1 : 0.4,
-                      cursor: datasetId ? 'pointer' : 'not-allowed'
-                    }}
-                  >
-                    <Icon path={vizType.path} />
-                  </div>
-                ))}
+            {showVisualizationsPanel && (
+              <div className="panel-module-content">
+                <div className="viz-grid">
+                  {[
+                    { name: 'Bar', path: icons.bar },
+                    { name: 'Line', path: icons.line },
+                    { name: 'Pie', path: icons.pie },
+                    { name: 'Area', path: icons.area },
+                    { name: 'Histogram', path: icons.hist },
+                    { name: 'Box Plot', path: icons.box },
+                    { name: 'Scatter', path: icons.scatter },
+                    { name: 'Heatmap', path: icons.heatmap },
+                    { name: 'Donut', path: icons.donut },
+                    { name: 'Bubble', path: icons.bubble },
+                    { name: 'Waterfall', path: icons.waterfall },
+                    { name: 'Funnel', path: icons.funnel },
+                  ].map((vizType) => (
+                    <div 
+                      key={vizType.name}
+                      className="viz-icon-box" 
+                      title={vizType.name}
+                      onClick={() => {
+                        if (!datasetId) return;
+                        setSelectedChartType(vizType.name);
+                        setIsChartModalOpen(true);
+                      }}
+                      style={{ 
+                        opacity: datasetId ? 1 : 0.4,
+                        cursor: datasetId ? 'pointer' : 'not-allowed'
+                      }}
+                    >
+                      <Icon path={vizType.path} />
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Data */}
@@ -1886,29 +2276,36 @@ setResultsPanel({
                 </svg>
                 <span>Data</span>
               </div>
-              <button className="hide-btn">Hide</button>
+              <button
+                className="hide-btn"
+                onClick={() => setShowDataPanel(!showDataPanel)}
+              >
+                {showDataPanel ? 'Hide' : 'Show'}
+              </button>
             </div>
-            <div className="panel-module-content">
-              {columns.length === 0 ? (
-                <div className="no-data-text">No dataset selected.</div>
-              ) : (
-                <div className="column-list">
-                  {columns.map((col, idx) => (
-                    <div key={idx} className="column-item">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2">
-                        <line x1="8" y1="6" x2="21" y2="6"></line>
-                        <line x1="8" y1="12" x2="21" y2="12"></line>
-                        <line x1="8" y1="18" x2="21" y2="18"></line>
-                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                      </svg>
-                      {col}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {showDataPanel && (
+              <div className="panel-module-content">
+                {columns.length === 0 ? (
+                  <div className="no-data-text">No dataset selected.</div>
+                ) : (
+                  <div className="column-list">
+                    {columns.map((col, idx) => (
+                      <div key={idx} className="column-item">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2">
+                          <line x1="8" y1="6" x2="21" y2="6"></line>
+                          <line x1="8" y1="12" x2="21" y2="12"></line>
+                          <line x1="8" y1="18" x2="21" y2="18"></line>
+                          <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                          <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                          <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                        </svg>
+                        {col}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1923,8 +2320,41 @@ setResultsPanel({
         <div className="bottom-left">
           Page 1
         </div>
-        <div className="bottom-right">
-          No visual selected
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '12px',
+          color: '#475569'
+        }}>
+          {selectedChart ? (
+            <>
+              <span style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#2563EB',
+                display: 'inline-block'
+              }}/>
+              <span style={{
+                color: '#2563EB',
+                fontWeight: '500'
+              }}>
+                Selected: {selectedChart.title}
+              </span>
+              <span style={{
+                color: '#94A3B8',
+                fontSize: '11px'
+              }}>
+                (Analytics will use this chart)
+              </span>
+            </>
+          ) : (
+            <span style={{ color: '#94A3B8' }}>
+              No visual selected — 
+              click a chart to select it
+            </span>
+          )}
         </div>
       </div>
 
@@ -2383,15 +2813,17 @@ setResultsPanel({
               {/* Action Buttons */}
               <div style={{
                 display: 'flex',
-                gap: '12px',
-                justifyContent: 'flex-end'
+                gap: '10px',
+                justifyContent: 'flex-end',
+                marginTop: '8px',
+                flexWrap: 'wrap'
               }}>
                 <button
                   onClick={handleCleanDataset}
                   disabled={isCleaning ||
                     intelligenceData.cleaned}
                   style={{
-                    padding: '10px 20px',
+                    padding: '10px 16px',
                     border: '1px solid #E2E8F0',
                     borderRadius: '8px',
                     background: intelligenceData.cleaned
@@ -2416,6 +2848,33 @@ setResultsPanel({
                     <>🧹 Clean Automatically</>
                   )}
                 </button>
+
+                <button
+                  onClick={handleAutoGenerateDashboard}
+                  disabled={isAutoGenerating}
+                  style={{
+                    padding: '10px 16px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    background: isAutoGenerating
+                      ? '#94A3B8' : '#7C3AED',
+                    color: 'white',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: isAutoGenerating
+                      ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {isAutoGenerating ? (
+                    <>⟳ Generating...</>
+                  ) : (
+                    <>✨ Auto Generate Dashboard</>
+                  )}
+                </button>
+
                 <button
                   onClick={() => {
                     if (
@@ -2425,14 +2884,14 @@ setResultsPanel({
                       !intelligenceData.cleaned
                     ) {
                       alert(
-                        'Please clean the dataset first before continuing. Click "Clean Automatically" to fix data issues.'
+                        'Please clean the dataset first before continuing.'
                       );
                       return;
                     }
                     setShowIntelligenceModal(false);
                   }}
                   style={{
-                    padding: '10px 24px',
+                    padding: '10px 20px',
                     border: 'none',
                     borderRadius: '8px',
                     background: (
@@ -2440,8 +2899,7 @@ setResultsPanel({
                       intelligenceData.duplicates > 0 ||
                       intelligenceData.outliers > 0
                     ) && !intelligenceData.cleaned
-                      ? '#94A3B8'
-                      : '#2563EB',
+                      ? '#94A3B8' : '#2563EB',
                     color: 'white',
                     fontSize: '13px',
                     fontWeight: '600',
