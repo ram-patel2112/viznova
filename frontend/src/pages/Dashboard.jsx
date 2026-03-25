@@ -161,6 +161,45 @@ const Dashboard = () => {
         setColumns(realColumns);
         setDatasetName(data.name || data.filename || '');
         setDatasetId(urlDatasetId);
+
+        const urlParams2 = new URLSearchParams(
+          window.location.search
+        );
+        const showIntelligence = urlParams2.get(
+          'showIntelligence'
+        );
+        const fromSample = urlParams2.get(
+          'fromSample'
+        );
+
+        if (showIntelligence === 'true') {
+          const colsMeta = data.columns_metadata || [];
+          const quality = data.quality_metrics || {};
+          
+          setIntelligenceData({
+            name: data.name || data.filename || '',
+            datasetId: urlDatasetId,
+            rows: data.row_count || 0,
+            columns: data.column_count || 0,
+            numericCols: colsMeta.filter(
+              c => c.type === 'numeric'
+            ).length,
+            categoricalCols: colsMeta.filter(
+              c => c.type === 'categorical'
+            ).length,
+            dateCols: colsMeta.filter(
+              c => c.type === 'date'
+            ).length,
+            missingValues: quality.total_missing || 0,
+            duplicates: quality.duplicate_count || 0,
+            outliers: quality.outlier_count || 0,
+            preprocessingSummary: {},
+            correlationInsights: 
+              data.correlation_insights || [],
+          });
+          
+          setShowIntelligenceModal(true);
+        }
         
         datasets[urlDatasetId] = {
           id: urlDatasetId,
@@ -187,6 +226,79 @@ const Dashboard = () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges, charts]);
+
+  useEffect(() => {
+    const handleKeyDown = async (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+
+        if (charts.length === 0) return;
+
+        if (savedReportId) {
+          setIsSaving(true);
+          try {
+            const reportData = {
+              name: reportName || datasetName || 'Untitled Report',
+              dataset_id: datasetId ? parseInt(datasetId) : null,
+              dataset_name: datasetName || '',
+              charts: charts.map(chart => ({
+                id: chart.id,
+                title: chart.title,
+                image: chart.image,
+                insight: chart.insight,
+                chartType: chart.chartType,
+                x: chart.x,
+                y: chart.y
+              })),
+              results_panel: resultsPanel.isOpen
+                ? {
+                    title: resultsPanel.title,
+                    content: resultsPanel.content,
+                    status: resultsPanel.status
+                  }
+                : null,
+              columns_metadata: columns
+            };
+
+            await fetch(
+              `http://localhost:8000/reports/${savedReportId}`,
+              {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reportData)
+              }
+            );
+
+            setHasUnsavedChanges(false);
+
+            setResultsPanel({
+              isOpen: true,
+              title: '✓ Report Saved',
+              content: 'Your changes have been saved successfully.',
+              status: 'success'
+            });
+          } catch(e) {
+            console.error('Ctrl+S save error:', e);
+          } finally {
+            setIsSaving(false);
+          }
+        } else {
+          setShowSaveModal(true);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    savedReportId,
+    charts,
+    datasetId,
+    datasetName,
+    columns,
+    resultsPanel,
+    reportName
+  ]);
 
   const handleFileUpload = async (event) => {
     if (!event.target.files || event.target.files.length === 0) return;

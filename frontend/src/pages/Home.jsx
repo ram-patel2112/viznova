@@ -1214,6 +1214,34 @@ const Home = () => {
                 icon: '💼',
                 file: 'example_sales.csv',
                 color: '#F0FDF4'
+              },
+              {
+                name: 'Employee Dataset',
+                desc: 'HR and employee performance data',
+                icon: '👥',
+                file: 'Employees.xlsx',
+                color: '#F5F3FF'
+              },
+              {
+                name: 'European Bank Dataset',
+                desc: 'Banking and financial transactions data',
+                icon: '🏦',
+                file: 'European_Bank.csv',
+                color: '#FFFBEB'
+              },
+              {
+                name: 'Analytics Dataset',
+                desc: 'Web and product analytics data',
+                icon: '📈',
+                file: 'analytics.csv',
+                color: '#F0FDF4'
+              },
+              {
+                name: 'Sample Dataset',
+                desc: '50 rows · Employee salary and performance',
+                icon: '📋',
+                file: 'sample.csv',
+                color: '#FFF1F2'
               }
             ].map((sample, i) => (
               <div key={i}
@@ -1226,13 +1254,17 @@ const Home = () => {
                     if (response.ok) {
                       const data = await response.json();
                       navigate(
-                        `/dashboard?datasetId=${data.id}`
+                        `/dashboard?datasetId=${data.id}&showIntelligence=true&fromSample=true`
                       );
                     } else {
-                      alert(`Please upload ${sample.file} manually from the root folder.`);
+                      alert(
+                        `Please upload ${sample.file} manually using Upload CSV.`
+                      );
                     }
                   } catch(e) {
-                    alert(`Please upload ${sample.file} manually using Upload CSV.`);
+                    alert(
+                      `Please upload ${sample.file} manually using Upload CSV.`
+                    );
                   }
                 }}
                 style={{

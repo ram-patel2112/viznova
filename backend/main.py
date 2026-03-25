@@ -519,6 +519,55 @@ async def save_report(report: dict):
             detail=str(e)
         )
 
+@app.put("/reports/{report_id}")
+async def update_report(
+    report_id: int, 
+    report: dict
+):
+    try:
+        db = SessionLocal()
+        db_report = db.query(ReportModel)\
+            .filter(
+                ReportModel.id == report_id
+            ).first()
+        
+        if not db_report:
+            raise HTTPException(
+                status_code=404,
+                detail="Report not found"
+            )
+        
+        db_report.name = report.get(
+            "name", db_report.name
+        )
+        db_report.charts = report.get(
+            "charts", db_report.charts
+        )
+        db_report.results_panel = report.get(
+            "results_panel", 
+            db_report.results_panel
+        )
+        db_report.columns_metadata = report.get(
+            "columns_metadata",
+            db_report.columns_metadata
+        )
+        db_report.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.close()
+        
+        return {
+            "id": report_id,
+            "message": "Report updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
 @app.get("/reports/{report_id}")
 async def get_report(report_id: int):
     try:
@@ -589,42 +638,47 @@ async def delete_report(report_id: int):
 async def load_sample_dataset(filename: str):
     allowed_files = [
         "Cars_data.csv",
-        "example_sales.csv"
+        "example_sales.csv",
+        "Employees.xlsx",
+        "European_Bank.csv",
+        "analytics.csv",
+        "sample.csv"
     ]
-
+    
     if filename not in allowed_files:
         raise HTTPException(
             status_code=400,
-            detail="Invalid sample file"
+            detail=f"Invalid sample file. Allowed: {allowed_files}"
         )
-
-    from pathlib import Path
-
-    root_path = Path(__file__).parent.parent
-    sample_path = root_path / filename
-
-    if not sample_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"{filename} not found in project root"
-        )
-
+    
     try:
-        os.makedirs("uploads", exist_ok=True)
-        dest_path = os.path.join(
-            "uploads", filename
-        )
-        shutil.copy2(str(sample_path), dest_path)
-
+        from pathlib import Path
+        import shutil
+        
+        uploads_dir = Path(__file__).parent / "uploads"
+        sample_path = uploads_dir / filename
+        
+        if not sample_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"{filename} not found in uploads folder"
+            )
+        
+        dest_path = str(sample_path)
+        
         meta = await DatasetService\
             .process_dataset(dest_path)
-
+        
         ds_id = len(datasets) + 1
+        
+        while ds_id in datasets:
+            ds_id += 1
+        
         datasets[ds_id] = {
             "id": ds_id,
             "name": filename,
             "file_path": dest_path,
-            "type": "CSV",
+            "type": "CSV" if filename.endswith(".csv") else "Excel",
             "columns_metadata": meta["columns"],
             "row_count": meta["row_count"],
             "column_count": meta["col_count"],
@@ -639,14 +693,14 @@ async def load_sample_dataset(filename: str):
                 "correlation_insights", []
             )
         }
-
+        
         try:
             db = SessionLocal()
             existing = db.query(DatasetModel)\
                 .filter(
                     DatasetModel.filename == filename
                 ).first()
-
+            
             if not existing:
                 db_dataset = DatasetModel(
                     filename=filename,
@@ -663,7 +717,7 @@ async def load_sample_dataset(filename: str):
             db.close()
         except Exception as e:
             print(f"DB save failed: {e}")
-
+        
         return {
             "id": ds_id,
             "name": filename,
@@ -681,8 +735,11 @@ async def load_sample_dataset(filename: str):
                 "correlation_insights", []
             )
         }
-
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"Sample dataset error: {e}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
